@@ -15,6 +15,7 @@
   --teal-950:#042f2e;--teal-900:#134e4a;--teal-800:#115e59;--teal-700:#0f766e;--teal-300:#5eead4;--teal-100:#ccfbf1;
   --ink:#0f172a;--mut:#64748b;--soft:#94a3b8;--bg:#f1f5f4;--card:#fff;--line:#e2e8f0;
   --amber:#d97706;--amber-bg:#fffbeb;--green:#059669;--green-bg:#ecfdf5;--rose:#e11d48;--rose-bg:#fff1f2;
+  --purple:#7c3aed;--purple-bg:#f5f3ff;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -59,6 +60,7 @@ main{flex:1;padding:18px 16px 90px;max-width:920px;margin:0 auto;width:100%}
 .btn:disabled{opacity:.4;cursor:default}
 .btn.ghost{background:#fff;color:#334155;border:1px solid var(--line)}
 .btn.whats{background:var(--green)}
+.btn.danger{background:var(--rose)}
 .btn.danger-link{background:none;color:var(--rose);padding:6px}
 .btn.sm{padding:7px 12px;font-size:13px}
 .icon-btn{padding:7px;color:var(--soft);border-radius:8px}
@@ -70,6 +72,9 @@ main{flex:1;padding:18px 16px 90px;max-width:920px;margin:0 auto;width:100%}
 .p-concluido{background:var(--green-bg);color:var(--green);border-color:#a7f3d0}
 .p-faltou{background:var(--rose-bg);color:var(--rose);border-color:#fecdd3}
 .p-cancelado{background:#f1f5f9;color:var(--soft);border-color:var(--line)}
+.p-pendente{background:var(--amber-bg);color:var(--amber);border-color:#fde68a}
+.p-em_andamento{background:var(--purple-bg);color:var(--purple);border-color:#ddd6fe}
+.p-concluida{background:var(--green-bg);color:var(--green);border-color:#a7f3d0}
 .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-100);color:var(--teal-800);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
 .meta{font-size:12px;color:var(--mut)}
 .flag{font-size:12px;color:var(--teal-700);margin-top:2px}
@@ -103,7 +108,39 @@ a.link{color:var(--teal-700)}
 .actions-list b{width:24px;text-align:right;font-variant-numeric:tabular-nums;color:var(--amber)}
 .actions-list b.zero{color:#cbd5e1}
 .actions-list .go{margin-left:auto;color:var(--teal-700);font-size:12px;font-weight:600}
-.sync-bar{background:var(--teal-100);border:1px solid #99f6e4;color:var(--teal-900);border-radius:10px;padding:8px 14px;font-size:12px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+/* kanban */
+.kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:640px){.kanban{grid-template-columns:1fr}}
+.kanban-col{background:#f8fafc;border:1px solid var(--line);border-radius:14px;padding:12px;min-height:120px}
+.kanban-col h3{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--mut);margin-bottom:10px}
+.kanban-col.col-em_andamento h3{color:var(--purple)}
+.kanban-col.col-concluida h3{color:var(--green)}
+.task-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:8px;cursor:default}
+.task-card:last-child{margin-bottom:0}
+.task-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.task-meta{font-size:11px;color:var(--mut)}
+.prio-alta{border-left:3px solid var(--rose)}
+.prio-normal{border-left:3px solid var(--amber)}
+.prio-baixa{border-left:3px solid var(--soft)}
+/* chat */
+.chat-wrap{display:flex;flex-direction:column;height:calc(100dvh - 200px);max-height:600px}
+@media(min-width:768px){.chat-wrap{height:calc(100dvh - 180px)}}
+.chat-msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#f8fafc;border:1px solid var(--line);border-radius:14px 14px 0 0}
+.chat-msg{max-width:78%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45}
+.chat-msg.mine{align-self:flex-end;background:var(--teal-700);color:#fff;border-bottom-right-radius:4px}
+.chat-msg.other{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
+.chat-msg .who{font-size:11px;font-weight:700;margin-bottom:3px}
+.chat-msg.mine .who{color:#99f6e4}
+.chat-msg.other .who{color:var(--teal-700)}
+.chat-msg .ts{font-size:10px;opacity:.6;margin-top:3px;text-align:right}
+.chat-input{display:flex;gap:8px;padding:10px;background:#fff;border:1px solid var(--line);border-top:none;border-radius:0 0 14px 14px}
+.chat-input input{border-radius:8px}
+.chat-input button{flex-shrink:0;background:var(--teal-700);color:#fff;padding:9px 14px;border-radius:8px;display:flex;align-items:center}
+/* cor dot profissional */
+.prof-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;display:inline-block;margin-right:4px}
+/* aniversário banner */
+.bday-banner{background:linear-gradient(135deg,#fef3c7,#fde68a);border:1px solid #fbbf24;border-radius:14px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.bday-banner .emoji{font-size:28px}
 </style>
 </head>
 <body>
@@ -142,14 +179,20 @@ const IC = {
   right:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><polyline points="9 18 15 12 9 6"/></svg>',
   x:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   upload:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>',
+  task:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>',
+  chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  prof:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  cake:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"/><line x1="2" y1="21" x2="22" y2="21"/><path d="M7 8v2"/><path d="M12 8v2"/><path d="M17 8v2"/><path d="M7 4h.01"/><path d="M12 4h.01"/><path d="M17 4h.01"/></svg>',
 };
 
-/* ── estado ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{} };
+/* ── estado global ── */
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let SEARCH_Q = "";
-let LOADING = false;
+let CHAT_CANAL = "geral";
+let CHAT_PROF_ID = null; // profissional logado no chat
+let CHAT_POLL = null;
 
 /* ── API helpers ── */
 async function api(method, path, body) {
@@ -167,22 +210,33 @@ async function api(method, path, body) {
 }
 
 async function reloadAll() {
-  const [patients, appointments, surveys, settings] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
     api("GET", "/settings"),
+    api("GET", "/profissionais"),
+    api("GET", "/tarefas"),
+    api("GET", "/aniversariantes"),
   ]);
-  DB = { patients, appointments, surveys, settings };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, chat: DB.chat||[] };
   render();
+}
+
+async function reloadChat() {
+  DB.chat = await api("GET", `/chat?canal=${encodeURIComponent(CHAT_CANAL)}&limit=100`);
+  renderChatMsgs();
 }
 
 /* ── utilidades ── */
 const PROCEDURES = ["Avaliação","Limpeza","Restauração","Canal","Extração","Clareamento","Ortodontia","Implante","Prótese","Outro"];
 const STATUS = { agendado:"Agendado", confirmado:"Confirmado", concluido:"Concluído", faltou:"Faltou", cancelado:"Cancelado" };
+const STATUS_TAREFA = { pendente:"Pendente", em_andamento:"Em andamento", concluida:"Concluída" };
+const PRIO = { baixa:"Baixa", normal:"Normal", alta:"Alta" };
 const uid = () => Math.random().toString(36).slice(2,9) + Date.now().toString(36);
 function todayISO() { const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 const fmtDate = iso => iso ? iso.split("-").reverse().join("/") : "—";
+function fmtTime(iso){ if(!iso) return ""; const d=new Date(iso); return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0"); }
 const digits = s => (s||"").replace(/\D/g,"");
 function addDays(iso,n){ const d=new Date(iso+"T00:00:00"); d.setDate(d.getDate()+n); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function monthsAgo(n){ const d=new Date(); d.setMonth(d.getMonth()-n); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
@@ -191,7 +245,9 @@ function fill(t,vars){ let o=t; for(const k in vars) o=o.split("{"+k+"}").join(v
 function esc(s){ return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 const pById = id => DB.patients.find(p=>p.id===id);
 const pName = id => pById(id)?.name || "Paciente removido";
-const initials = n => n.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
+const profById = id => DB.profissionais.find(p=>p.id===id);
+const profNome = id => profById(id)?.nome || "—";
+const initials = n => (n||"?").split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2500); }
 
 /* ── cálculos ── */
@@ -206,35 +262,68 @@ function calc(){
   const pendingReview = DB.surveys.filter(s=>s.score>=9 && !s.reviewSent);
   const scores = DB.surveys.filter(s=>s.score!==null && s.score!==undefined).map(s=>s.score);
   const nps = scores.length ? Math.round((scores.filter(s=>s>=9).length - scores.filter(s=>s<=6).length)/scores.length*100) : null;
+  const tarefasPendentes = DB.tarefas.filter(t=>t.status!=="concluida").length;
+  const aniversarios = DB.aniversariantes.length;
   return { t, pendingConfirm, inactive, pendingSurvey, pendingReview, nps,
-    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length } };
+    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios } };
 }
 
 /* ── navegação ── */
 const NAV = [
-  {id:"dash",label:"Painel",ic:IC.dash},{id:"patients",label:"Pacientes",ic:IC.users},
-  {id:"agenda",label:"Agenda",ic:IC.cal},{id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
-  {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},{id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
-  {id:"review",label:"Aval. Google",ic:IC.star,badge:"review"},{id:"settings",label:"Ajustes",ic:IC.gear},
+  {id:"dash",label:"Painel",ic:IC.dash},
+  {id:"patients",label:"Pacientes",ic:IC.users},
+  {id:"agenda",label:"Agenda",ic:IC.cal},
+  {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
+  {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
+  {id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
+  {id:"review",label:"Aval. Google",ic:IC.star,badge:"review"},
+  {id:"tarefas",label:"Tarefas",ic:IC.task,badge:"tarefas"},
+  {id:"chat",label:"Chat",ic:IC.chat},
+  {id:"profissionais",label:"Profissionais",ic:IC.prof},
+  {id:"settings",label:"Ajustes",ic:IC.gear},
 ];
-function go(tab){ TAB=tab; render(); window.scrollTo(0,0); }
 
-/* ── render ── */
+function go(tab){
+  TAB=tab;
+  if(CHAT_POLL){ clearInterval(CHAT_POLL); CHAT_POLL=null; }
+  if(tab==="chat"){
+    reloadChat();
+    CHAT_POLL = setInterval(reloadChat, 5000);
+  }
+  render();
+  window.scrollTo(0,0);
+}
+
+/* ── render principal ── */
 function render(){
   const C = calc();
   document.getElementById("nav").innerHTML = NAV.map(n=>{
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
-  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, confirm:vConfirm, reactivate:vReactivate, survey:vSurvey, review:vReview, settings:vSettings };
+  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, confirm:vConfirm, reactivate:vReactivate,
+    survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
+  if(TAB==="chat") setupChatUI();
 }
 
-/* ── Painel ── */
+/* ════════════════════════════════════════════
+   PAINEL
+════════════════════════════════════════════ */
 function vDash(C){
   const todayAppts = DB.appointments.filter(a=>a.date===C.t && a.status!=="cancelado").sort((a,b)=>a.time.localeCompare(b.time));
   const act=(n,txt,tab)=>`<li><b class="${n?"":"zero"}">${n}</b><span style="${n?"":"color:#94a3b8"}">${txt}</span>${n?`<button class="go" onclick="go('${tab}')">Resolver →</button>`:""}</li>`;
+  const bdayBanner = DB.aniversariantes.length ? `
+    <div class="bday-banner">
+      <div class="emoji">🎂</div>
+      <div class="grow">
+        <div style="font-weight:700;font-size:14px">${DB.aniversariantes.length === 1 ? "1 aniversariante hoje!" : DB.aniversariantes.length+" aniversariantes hoje!"}</div>
+        <div style="font-size:13px;color:#92400e">${DB.aniversariantes.map(p=>p.name.split(" ")[0]).join(", ")}</div>
+      </div>
+      <button class="btn sm" style="background:#d97706" onclick="go('patients')">Ver parabéns</button>
+    </div>` : "";
   return `${header("Painel","Hoje, "+fmtDate(C.t))}
+  ${bdayBanner}
   <div class="grid g4" style="margin-bottom:16px">
     <button class="stat" onclick="go('patients')"><b>${DB.patients.length}</b><span>Pacientes</span></button>
     <button class="stat" onclick="go('agenda')"><b>${todayAppts.length}</b><span>Consultas hoje</span></button>
@@ -244,7 +333,17 @@ function vDash(C){
   <div class="grid" style="grid-template-columns:1fr;gap:12px">
     <div class="card"><h2>Agenda de hoje</h2>
       ${todayAppts.length===0?`<div style="color:#94a3b8;font-size:14px;padding:8px 0">Nenhuma consulta hoje.</div>`:
-        todayAppts.map(a=>`<div class="row"><b style="color:var(--teal-800);font-variant-numeric:tabular-nums">${a.time}</b><span class="grow">${esc(pName(a.patientId))}</span><span class="meta">${esc(a.procedure)}</span>${pill(a.status)}</div>`).join("")}
+        todayAppts.map(a=>{
+          const prof = a.profissionalId ? profById(a.profissionalId) : null;
+          return `<div class="row">
+            <b style="color:var(--teal-800);font-variant-numeric:tabular-nums">${a.time}</b>
+            <div class="grow">
+              <div style="font-weight:500;font-size:14px">${esc(pName(a.patientId))}</div>
+              <div class="meta">${esc(a.procedure)}${prof?` · <span style="color:${prof.cor}">${esc(prof.nome)}</span>`:""}${a.duracaoMinutos?` · ${a.duracaoMinutos}min`:""}</div>
+            </div>
+            ${pill(a.status)}
+          </div>`;
+        }).join("")}
     </div>
     <div class="card"><h2>Próximas ações</h2>
       <ul class="actions-list">
@@ -252,33 +351,48 @@ function vDash(C){
         ${act(C.badges.reactivate,"pacientes inativos para reativar","reactivate")}
         ${act(C.badges.survey,"pesquisas de satisfação a enviar","survey")}
         ${act(C.badges.review,"pedidos de avaliação Google pendentes","review")}
+        ${act(C.badges.tarefas,"tarefas em aberto","tarefas")}
       </ul>
     </div>
   </div>`;
 }
 
-/* ── Pacientes ── */
+/* ════════════════════════════════════════════
+   PACIENTES
+════════════════════════════════════════════ */
 function vPatients(){
+  const hoje = todayISO().slice(5); // MM-DD
   const q = SEARCH_Q.toLowerCase();
   const list = DB.patients.filter(p=>p.name.toLowerCase().includes(q)||digits(p.phone).includes(digits(q))).sort((a,b)=>a.name.localeCompare(b.name));
   return `${header("Pacientes",DB.patients.length+" cadastrados",`<button class="btn" onclick="openPatientForm()">${IC.plus} Novo</button>`)}
   <div class="searchbar">${IC.search}<input value="${esc(SEARCH_Q)}" oninput="SEARCH_Q=this.value;renderKeepFocus(this)" placeholder="Buscar por nome ou telefone…"></div>
   ${list.length===0?empty(SEARCH_Q?"Nenhum paciente encontrado.":"Nenhum paciente cadastrado ainda."):
-  `<div class="card" style="padding:4px 16px">`+list.map(p=>`
-    <div class="row">
-      <div class="avatar">${initials(p.name)}</div>
-      <div class="grow"><div style="font-weight:500;font-size:14px">${esc(p.name)}</div>
-        <div class="meta">${esc(p.phone)||"sem telefone"} · Última visita: ${fmtDate(p.lastVisit)}</div></div>
+  `<div class="card" style="padding:4px 16px">`+list.map(p=>{
+    const isBday = p.birth && p.birth.slice(5) === hoje;
+    return `<div class="row">
+      <div class="avatar" style="${isBday?"background:#fde68a;color:#92400e":""}">${isBday?"🎂":initials(p.name)}</div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(p.name)}${isBday?' <span style="color:#d97706;font-size:12px">Aniversário hoje!</span>':""}</div>
+        <div class="meta">${esc(p.phone)||"sem telefone"} · Última visita: ${fmtDate(p.lastVisit)}</div>
+      </div>
+      ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
       <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
       <button class="icon-btn del" onclick="delPatient('${p.id}')" aria-label="Excluir">${IC.trash}</button>
-    </div>`).join("")+`</div>`}`;
+    </div>`;
+  }).join("")+`</div>`}`;
 }
 function renderKeepFocus(el){ const pos=el.selectionStart; render(); const n=document.querySelector(".searchbar input"); if(n){n.focus();n.setSelectionRange(pos,pos);} }
 async function delPatient(id){
   if(!confirm("Excluir este paciente e suas consultas?")) return;
   await api("DELETE", `/patients/${id}`);
-  await reloadAll();
-  toast("Paciente excluído.");
+  await reloadAll(); toast("Paciente excluído.");
+}
+async function sendBirthday(id){
+  const p = pById(id); if(!p) return;
+  const msg = fill(DB.settings.msgAniversario||"Olá {nome}! 🎂 Feliz aniversário da equipe da Moura Odontologia!",{nome:p.name.split(" ")[0]});
+  window.open(wa(p.phone,msg),"_blank");
+  await api("PUT",`/patients/${id}/birthday-sent`);
+  toast("Parabéns enviado!");
 }
 function openPatientForm(id){
   const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:""};
@@ -292,7 +406,7 @@ function openPatientForm(id){
     <label class="f"><span>Última visita</span><input type="date" id="f-last" value="${p.lastVisit||""}"></label>
     <label class="f"><span>Observações clínicas</span><textarea id="f-notes" rows="3">${esc(p.notes)}</textarea></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="savePatient('${id||""}')">Salvar paciente</button></div>`);
+    <button class="btn" onclick="savePatient('${id||""}')">Salvar</button></div>`);
 }
 async function savePatient(id){
   const g=i=>document.getElementById(i).value.trim();
@@ -302,7 +416,9 @@ async function savePatient(id){
   closeModal(); await reloadAll(); toast("Paciente salvo.");
 }
 
-/* ── Agenda ── */
+/* ════════════════════════════════════════════
+   AGENDA
+════════════════════════════════════════════ */
 function vAgenda(){
   const appts = DB.appointments.filter(a=>a.date===AGENDA_DAY).sort((a,b)=>a.time.localeCompare(b.time));
   return `${header("Agenda","",`<button class="btn" onclick="openApptForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Nova consulta</button>`)}
@@ -314,16 +430,26 @@ function vAgenda(){
   </div>
   ${DB.patients.length===0?empty("Cadastre um paciente antes de criar consultas."):
     appts.length===0?empty("Nenhuma consulta em "+fmtDate(AGENDA_DAY)+"."):
-  `<div class="card" style="padding:4px 16px">`+appts.map(a=>`
-    <div class="row">
-      <b style="color:var(--teal-800);width:48px;font-variant-numeric:tabular-nums">${a.time}</b>
-      <div class="grow"><div style="font-weight:500;font-size:14px">${esc(pName(a.patientId))}</div><div class="meta">${esc(a.procedure)}</div></div>
+  `<div class="card" style="padding:4px 16px">`+appts.map(a=>{
+    const prof = a.profissionalId ? profById(a.profissionalId) : null;
+    return `<div class="row">
+      <div style="text-align:center;min-width:48px">
+        <b style="color:var(--teal-800);display:block;font-variant-numeric:tabular-nums">${a.time}</b>
+        ${a.duracaoMinutos?`<span class="meta">${a.duracaoMinutos}min</span>`:""}
+      </div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(pName(a.patientId))}</div>
+        <div class="meta">${esc(a.procedure)}${a.numProntuario?` · Prontuário: ${esc(a.numProntuario)}`:""}${a.numOrcamento?` · Orç: ${esc(a.numOrcamento)}`:""}
+        ${prof?`<br><span style="color:${prof.cor}">● ${esc(prof.nome)}</span>`:""}
+        </div>
+      </div>
       ${pill(a.status)}
       <select style="width:auto;font-size:12px;padding:6px 8px" onchange="setApptStatus('${a.id}',this.value)">
         ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}
       </select>
       <button class="icon-btn del" onclick="delAppt('${a.id}')">${IC.trash}</button>
-    </div>`).join("")+`</div>`}`;
+    </div>`;
+  }).join("")+`</div>`}`;
 }
 async function setApptStatus(id,status){
   const a = DB.appointments.find(x=>x.id===id);
@@ -342,24 +468,40 @@ async function delAppt(id){
 }
 function openApptForm(){
   const ps = DB.patients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const profs = DB.profissionais.filter(p=>p.ativo);
   modal("Nova consulta",`
     <label class="f"><span>Paciente</span><select id="a-pat">${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select></label>
+    <label class="f"><span>Dentista responsável</span><select id="a-prof"><option value="">— Sem preferência —</option>${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
     <div class="grid g2">
       <label class="f"><span>Data</span><input type="date" id="a-date" value="${AGENDA_DAY}"></label>
       <label class="f"><span>Horário</span><input type="time" id="a-time" value="09:00"></label>
     </div>
-    <label class="f"><span>Procedimento</span><select id="a-proc">${PROCEDURES.map(p=>`<option>${p}</option>`).join("")}</select></label>
+    <div class="grid g2">
+      <label class="f"><span>Duração (minutos)</span><input type="number" id="a-dur" value="60" min="15" step="15"></label>
+      <label class="f"><span>Procedimento</span><select id="a-proc">${PROCEDURES.map(p=>`<option>${p}</option>`).join("")}</select></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>N° Prontuário</span><input id="a-pron" placeholder="Opcional"></label>
+      <label class="f"><span>N° Orçamento</span><input id="a-orc" placeholder="Opcional"></label>
+    </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="saveAppt()">Agendar</button></div>`);
 }
 async function saveAppt(){
   const g=i=>document.getElementById(i).value;
   if(!g("a-date")||!g("a-time")){ toast("Informe data e horário."); return; }
-  await api("POST","/appointments",{patientId:g("a-pat"),date:g("a-date"),time:g("a-time"),procedure:g("a-proc"),status:"agendado",confirmSent:false});
+  await api("POST","/appointments",{
+    patientId:g("a-pat"), profissionalId:g("a-prof")||null,
+    date:g("a-date"), time:g("a-time"), duracaoMinutos:parseInt(g("a-dur"))||60,
+    procedure:g("a-proc"), numProntuario:g("a-pron"), numOrcamento:g("a-orc"),
+    status:"agendado", confirmSent:false
+  });
   AGENDA_DAY=g("a-date"); closeModal(); await reloadAll(); toast("Consulta agendada.");
 }
 
-/* ── Confirmações ── */
+/* ════════════════════════════════════════════
+   CONFIRMAÇÕES
+════════════════════════════════════════════ */
 function vConfirm(C){
   const q=C.pendingConfirm.sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   return header("Confirmações","Consultas agendadas para as próximas 48 horas ainda não confirmadas.")+
@@ -384,7 +526,9 @@ async function markConfirmed(id){
   await reloadAll(); toast("Consulta confirmada.");
 }
 
-/* ── Reativação ── */
+/* ════════════════════════════════════════════
+   REATIVAÇÃO
+════════════════════════════════════════════ */
 function vReactivate(C){
   const list=C.inactive.slice().sort((a,b)=>(a.lastVisit||"").localeCompare(b.lastVisit||""));
   return header("Reativação de pacientes",`Pacientes sem visita há mais de ${DB.settings.inactivityMonths||6} meses e sem consulta futura.`)+
@@ -401,7 +545,9 @@ async function sendReactivate(id){
   await reloadAll();
 }
 
-/* ── Satisfação ── */
+/* ════════════════════════════════════════════
+   SATISFAÇÃO
+════════════════════════════════════════════ */
 function vSurvey(C){
   const surveyed=new Map(DB.surveys.map(s=>[s.appointmentId,s]));
   const done=DB.appointments.filter(a=>a.status==="concluido").sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
@@ -438,7 +584,9 @@ async function setScore(id,score){
   await reloadAll(); toast("Nota registrada.");
 }
 
-/* ── Avaliação Google ── */
+/* ════════════════════════════════════════════
+   AVALIAÇÃO GOOGLE
+════════════════════════════════════════════ */
 function vReview(){
   const list=DB.surveys.filter(s=>s.score>=9).sort((a,b)=>(a.reviewSent===b.reviewSent)?0:(a.reviewSent?1:-1));
   return header("Avaliação Google","Promotores (nota 9 ou 10) recebem convite para avaliar no Google.")+
@@ -457,7 +605,185 @@ async function sendReview(id){
   await reloadAll();
 }
 
-/* ── Ajustes ── */
+/* ════════════════════════════════════════════
+   TAREFAS (kanban)
+════════════════════════════════════════════ */
+function vTarefas(){
+  const cols = ["pendente","em_andamento","concluida"];
+  const colLabel = {pendente:"Pendente",em_andamento:"Em andamento",concluida:"Concluída"};
+  const prioOrder = {alta:0,normal:1,baixa:2};
+  return `${header("Tarefas","Kanban da equipe.",`<button class="btn" onclick="openTarefaForm()">${IC.plus} Nova tarefa</button>`)}
+  <div class="kanban">
+    ${cols.map(col=>{
+      const items = DB.tarefas.filter(t=>t.status===col).sort((a,b)=>prioOrder[a.prioridade]-prioOrder[b.prioridade]);
+      return `<div class="kanban-col col-${col}">
+        <h3>${colLabel[col]} <span style="font-weight:400;opacity:.7">${items.length}</span></h3>
+        ${items.map(t=>`
+          <div class="task-card prio-${t.prioridade}">
+            <div class="task-title">${esc(t.titulo)}</div>
+            ${t.descricao?`<div class="task-meta" style="margin-bottom:4px">${esc(t.descricao)}</div>`:""}
+            <div class="task-meta">
+              ${t.responsavelNome?`👤 ${esc(t.responsavelNome)}`:""}
+              ${t.patientName?` · 🦷 ${esc(t.patientName)}`:""}
+              ${t.dataVencimento?` · 📅 ${fmtDate(t.dataVencimento)}`:""}
+            </div>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+              ${cols.filter(c=>c!==col).map(c=>`<button class="btn ghost sm" style="font-size:11px;padding:4px 8px" onclick="moverTarefa(${t.id},'${c}')">${colLabel[c]}</button>`).join("")}
+              <button class="icon-btn del" onclick="delTarefa(${t.id})" style="margin-left:auto">${IC.trash}</button>
+            </div>
+          </div>`).join("")}
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+async function moverTarefa(id, novoStatus){
+  const t = DB.tarefas.find(x=>x.id===id);
+  await api("PUT",`/tarefas/${id}`,{...t,status:novoStatus});
+  await reloadAll(); toast("Tarefa atualizada.");
+}
+async function delTarefa(id){
+  if(!confirm("Excluir esta tarefa?")) return;
+  await api("DELETE",`/tarefas/${id}`);
+  await reloadAll(); toast("Tarefa excluída.");
+}
+function openTarefaForm(){
+  const profs = DB.profissionais.filter(p=>p.ativo);
+  const pacs = DB.patients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  modal("Nova tarefa",`
+    <label class="f"><span>Título *</span><input id="t-titulo" placeholder="Ex: Ligar para confirmar retorno"></label>
+    <label class="f"><span>Descrição</span><textarea id="t-desc" rows="2"></textarea></label>
+    <div class="grid g2">
+      <label class="f"><span>Prioridade</span><select id="t-prio">
+        <option value="normal">Normal</option><option value="alta">Alta</option><option value="baixa">Baixa</option>
+      </select></label>
+      <label class="f"><span>Vencimento</span><input type="date" id="t-venc"></label>
+    </div>
+    <label class="f"><span>Responsável</span><select id="t-resp"><option value="">— Nenhum —</option>${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Paciente relacionado</span><select id="t-pac"><option value="">— Nenhum —</option>${pacs.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveTarefa()">Criar tarefa</button></div>`);
+}
+async function saveTarefa(){
+  const g=i=>document.getElementById(i).value;
+  if(!g("t-titulo").trim()){ toast("Informe o título."); return; }
+  await api("POST","/tarefas",{
+    titulo:g("t-titulo").trim(), descricao:g("t-desc"),
+    prioridade:g("t-prio"), dataVencimento:g("t-venc")||null,
+    responsavelId:g("t-resp")||null, patientId:g("t-pac")||null, status:"pendente"
+  });
+  closeModal(); await reloadAll(); toast("Tarefa criada.");
+}
+
+/* ════════════════════════════════════════════
+   CHAT DA EQUIPE
+════════════════════════════════════════════ */
+function vChat(){
+  const profs = DB.profissionais.filter(p=>p.ativo);
+  if(profs.length===0) return header("Chat da equipe","")+"<div class='empty'>Cadastre profissionais primeiro para usar o chat.</div>";
+  if(!CHAT_PROF_ID || !profs.find(p=>p.id===CHAT_PROF_ID)) CHAT_PROF_ID = profs[0].id;
+  return `${header("Chat da equipe","Comunicação interna da clínica.")}
+  <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+    <label class="f" style="margin:0;flex:1;min-width:160px"><span style="font-size:11px">Você é:</span>
+      <select id="chat-prof-sel" onchange="CHAT_PROF_ID=parseInt(this.value)" style="font-size:13px;padding:7px 10px">
+        ${profs.map(p=>`<option value="${p.id}" ${CHAT_PROF_ID===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}
+      </select>
+    </label>
+    <label class="f" style="margin:0;flex:1;min-width:130px"><span style="font-size:11px">Canal:</span>
+      <input id="chat-canal-inp" value="${esc(CHAT_CANAL)}" style="font-size:13px;padding:7px 10px" placeholder="geral" onchange="CHAT_CANAL=this.value.trim()||'geral';reloadChat()">
+    </label>
+  </div>
+  <div class="chat-wrap">
+    <div class="chat-msgs" id="chat-msgs">${renderChatMsgsHTML()}</div>
+    <div class="chat-input">
+      <input id="chat-inp" placeholder="Digite uma mensagem…" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}">
+      <button onclick="sendChat()">${IC.send}</button>
+    </div>
+  </div>`;
+}
+function renderChatMsgsHTML(){
+  if(!DB.chat || DB.chat.length===0) return `<div style="color:var(--soft);text-align:center;padding:20px;font-size:14px">Nenhuma mensagem ainda. Diga olá! 👋</div>`;
+  return DB.chat.map(m=>{
+    const mine = m.profissionalId === CHAT_PROF_ID;
+    const hora = m.created_at ? m.created_at.slice(11,16) : "";
+    return `<div class="chat-msg ${mine?"mine":"other"}">
+      <div class="who" style="${mine?"":"color:"+m.profissionalCor}">${esc(m.profissionalNome)}</div>
+      <div>${esc(m.conteudo)}</div>
+      <div class="ts">${hora}</div>
+    </div>`;
+  }).join("");
+}
+function renderChatMsgs(){
+  const el = document.getElementById("chat-msgs");
+  if(!el) return;
+  el.innerHTML = renderChatMsgsHTML();
+  el.scrollTop = el.scrollHeight;
+}
+function setupChatUI(){
+  const el = document.getElementById("chat-msgs");
+  if(el) el.scrollTop = el.scrollHeight;
+}
+async function sendChat(){
+  const inp = document.getElementById("chat-inp");
+  const msg = inp?.value.trim(); if(!msg || !CHAT_PROF_ID) return;
+  inp.value = "";
+  await api("POST","/chat",{profissionalId:CHAT_PROF_ID, canal:CHAT_CANAL, conteudo:msg});
+  await reloadChat();
+}
+
+/* ════════════════════════════════════════════
+   PROFISSIONAIS
+════════════════════════════════════════════ */
+function vProfissionais(){
+  const list = DB.profissionais.slice().sort((a,b)=>a.nome.localeCompare(b.nome));
+  return `${header("Profissionais",list.length+" cadastrados",`<button class="btn" onclick="openProfForm()">${IC.plus} Novo</button>`)}
+  ${list.length===0?empty("Nenhum profissional cadastrado ainda."):
+  `<div class="card" style="padding:4px 16px">`+list.map(p=>`
+    <div class="row">
+      <div class="avatar" style="background:${p.cor}22;color:${p.cor}">${initials(p.nome)}</div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(p.nome)} ${!p.ativo?'<span class="pill" style="background:#f1f5f9;color:#94a3b8;border-color:#e2e8f0">Inativo</span>':""}</div>
+        <div class="meta">${esc(p.especialidade)||"Sem especialidade"}${p.cro?" · CRO "+esc(p.cro):""}${p.email?" · "+esc(p.email):""}</div>
+      </div>
+      <div class="prof-dot" style="background:${p.cor};width:14px;height:14px;border-radius:50%"></div>
+      <button class="icon-btn" onclick="openProfForm(${p.id})">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delProf(${p.id})">${IC.trash}</button>
+    </div>`).join("")+`</div>`}`;
+}
+function openProfForm(id){
+  const p = id ? profById(id) : {nome:"",cro:"",especialidade:"",telefone:"",email:"",cor:"#0ea5e9",ativo:true};
+  modal(id?"Editar profissional":"Novo profissional",`
+    <label class="f"><span>Nome completo *</span><input id="p-nome" value="${esc(p.nome)}"></label>
+    <div class="grid g2">
+      <label class="f"><span>Especialidade</span><input id="p-esp" value="${esc(p.especialidade)}" placeholder="Ex: Ortodontia"></label>
+      <label class="f"><span>CRO</span><input id="p-cro" value="${esc(p.cro)}" placeholder="000000"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Telefone</span><input id="p-tel" value="${esc(p.telefone)}"></label>
+      <label class="f"><span>E-mail</span><input id="p-email" value="${esc(p.email)}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Cor na agenda</span><input type="color" id="p-cor" value="${p.cor||"#0ea5e9"}" style="height:40px;padding:4px"></label>
+      <label class="f"><span>Status</span><select id="p-ativo"><option value="true" ${p.ativo?"selected":""}>Ativo</option><option value="false" ${!p.ativo?"selected":""}>Inativo</option></select></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveProf(${id||0})">Salvar</button></div>`);
+}
+async function saveProf(id){
+  const g=i=>document.getElementById(i).value.trim();
+  if(!g("p-nome")){ toast("Informe o nome."); return; }
+  const data={nome:g("p-nome"),cro:g("p-cro"),especialidade:g("p-esp"),telefone:g("p-tel"),email:g("p-email"),cor:g("p-cor"),ativo:document.getElementById("p-ativo").value==="true"};
+  if(id){ await api("PUT",`/profissionais/${id}`,data); } else { await api("POST","/profissionais",data); }
+  closeModal(); await reloadAll(); toast("Profissional salvo.");
+}
+async function delProf(id){
+  if(!confirm("Excluir este profissional?")) return;
+  await api("DELETE",`/profissionais/${id}`);
+  await reloadAll(); toast("Profissional excluído.");
+}
+
+/* ════════════════════════════════════════════
+   AJUSTES
+════════════════════════════════════════════ */
 function vSettings(){
   const s=DB.settings;
   return header("Ajustes","Configurações gerais e modelos de mensagem.")+`
@@ -470,9 +796,10 @@ function vSettings(){
     <label class="f"><span>Reativação — {nome} {ultimaVisita}</span><textarea id="s-react" rows="4">${esc(s.msgReactivate||"")}</textarea></label>
     <label class="f"><span>Pesquisa — {nome}</span><textarea id="s-survey" rows="4">${esc(s.msgSurvey||"")}</textarea></label>
     <label class="f"><span>Avaliação Google — {nome} {link}</span><textarea id="s-review" rows="4">${esc(s.msgReview||"")}</textarea></label>
+    <label class="f"><span>Aniversário — {nome}</span><textarea id="s-bday" rows="3">${esc(s.msgAniversario||"")}</textarea></label>
   </div>
   <div class="card" style="margin-bottom:12px"><h2>Migração de dados</h2>
-    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Se você já usou o CRM antigo (sem backend), importe os dados salvos no navegador aqui.</p>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Importe dados do CRM antigo (backup .json).</p>
     <button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>
     <input type="file" id="importFile" accept=".json" style="display:none" onchange="importBackup(this)">
   </div>
@@ -482,7 +809,8 @@ async function saveSettings(){
   const g=i=>document.getElementById(i).value;
   await api("PUT","/settings",{
     googleReviewLink:g("s-link").trim(), inactivityMonths:g("s-months"),
-    msgConfirm:g("s-confirm"), msgReactivate:g("s-react"), msgSurvey:g("s-survey"), msgReview:g("s-review")
+    msgConfirm:g("s-confirm"), msgReactivate:g("s-react"), msgSurvey:g("s-survey"),
+    msgReview:g("s-review"), msgAniversario:g("s-bday")
   });
   await reloadAll(); toast("Ajustes salvos.");
 }
@@ -500,7 +828,9 @@ async function importBackup(input){
   reader.readAsText(f); input.value="";
 }
 
-/* ── componentes ── */
+/* ════════════════════════════════════════════
+   COMPONENTES COMPARTILHADOS
+════════════════════════════════════════════ */
 function header(title,sub,action){ return `<div class="hd"><div><h1>${title}</h1>${sub?`<p>${sub}</p>`:""}</div>${action||""}</div>`; }
 function empty(t){ return `<div class="empty">${t}</div>`; }
 function pill(s){ return `<span class="pill p-${s}">${STATUS[s]||s}</span>`; }
