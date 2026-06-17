@@ -29,6 +29,8 @@ DEFAULT_SETTINGS = {
     "msgSurvey": "Olá {nome}! Obrigado por sua visita à Moura Odontologia e Associados. 💙 Sua opinião é muito importante: de 0 a 10, qual a chance de você nos recomendar a um amigo ou familiar? É só responder com a nota!",
     "msgReview": "Olá {nome}! Que alegria saber que você teve uma ótima experiência conosco! 🌟 Você nos ajudaria muito deixando uma avaliação no Google? Leva menos de 1 minuto: {link}",
     "msgAniversario": "Olá {nome}! 🎂 A equipe da Moura Odontologia e Associados deseja a você um feliz aniversário! Que este novo ano seja repleto de saúde e sorrisos bonitos. Parabéns! 🎉",
+    "notifLembreteMinutos": "60",
+    "notifAtivas": "true",
 }
 
 def init_db():
