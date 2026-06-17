@@ -189,10 +189,13 @@ const IC = {
 let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
+let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
 let CHAT_POLL = null;
+let PUSH_SUPPORTED = ("serviceWorker" in navigator && "PushManager" in window);
+let PUSH_SUBSCRIBED = false;
 
 /* ── API helpers ── */
 async function api(method, path, body) {
@@ -373,7 +376,7 @@ function vPatients(){
       <div class="avatar" style="${isBday?"background:#fde68a;color:#92400e":""}">${isBday?"🎂":initials(p.name)}</div>
       <div class="grow">
         <div style="font-weight:500;font-size:14px">${esc(p.name)}${isBday?' <span style="color:#d97706;font-size:12px">Aniversário hoje!</span>':""}</div>
-        <div class="meta">${esc(p.phone)||"sem telefone"} · Última visita: ${fmtDate(p.lastVisit)}</div>
+        <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
       </div>
       ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
       <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
@@ -395,34 +398,48 @@ async function sendBirthday(id){
   toast("Parabéns enviado!");
 }
 function openPatientForm(id){
-  const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:""};
+  const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:"",numProntuario:""};
   modal(id?"Editar paciente":"Novo paciente",`
     <label class="f"><span>Nome completo *</span><input id="f-name" value="${esc(p.name)}"></label>
     <div class="grid g2">
       <label class="f"><span>Telefone (WhatsApp) *</span><input id="f-phone" value="${esc(p.phone)}" placeholder="(11) 99999-9999"></label>
       <label class="f"><span>Nascimento</span><input type="date" id="f-birth" value="${p.birth||""}"></label>
     </div>
+    <div class="grid g2">
+      <label class="f"><span>N° Prontuário</span><input id="f-pron" value="${esc(p.numProntuario||"")}" placeholder="Opcional"></label>
+      <label class="f"><span>Última visita</span><input type="date" id="f-last" value="${p.lastVisit||""}"></label>
+    </div>
     <label class="f"><span>E-mail</span><input id="f-email" value="${esc(p.email)}"></label>
-    <label class="f"><span>Última visita</span><input type="date" id="f-last" value="${p.lastVisit||""}"></label>
     <label class="f"><span>Observações clínicas</span><textarea id="f-notes" rows="3">${esc(p.notes)}</textarea></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="savePatient('${id||""}')">Salvar</button></div>`);
 }
 async function savePatient(id){
   const g=i=>document.getElementById(i).value.trim();
-  const f={name:g("f-name"),phone:g("f-phone"),email:g("f-email"),birth:g("f-birth")||null,lastVisit:g("f-last")||null,notes:g("f-notes")};
+  const f={name:g("f-name"),phone:g("f-phone"),email:g("f-email"),birth:g("f-birth")||null,lastVisit:g("f-last")||null,notes:g("f-notes"),numProntuario:g("f-pron")};
   if(!f.name || digits(f.phone).length<10){ toast("Preencha nome e telefone válido."); return; }
   if(id){ await api("PUT",`/patients/${id}`,{...f,id}); } else { await api("POST","/patients",f); }
   closeModal(); await reloadAll(); toast("Paciente salvo.");
 }
 
 /* ════════════════════════════════════════════
-   AGENDA
+   AGENDA (Dia / Semana / Mês / Ano)
 ════════════════════════════════════════════ */
 function vAgenda(){
-  const appts = DB.appointments.filter(a=>a.date===AGENDA_DAY).sort((a,b)=>a.time.localeCompare(b.time));
+  const viewBtns = ["dia","semana","mes","ano"].map(v=>
+    `<button class="btn ${AGENDA_VIEW===v?"":"ghost"} sm" onclick="AGENDA_VIEW='${v}';render()" style="text-transform:capitalize">${v}</button>`
+  ).join("");
+  const body = AGENDA_VIEW==="dia" ? vAgendaDia() :
+               AGENDA_VIEW==="semana" ? vAgendaSemana() :
+               AGENDA_VIEW==="mes" ? vAgendaMes() : vAgendaAno();
   return `${header("Agenda","",`<button class="btn" onclick="openApptForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Nova consulta</button>`)}
-  <div class="daynav">
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${viewBtns}</div>
+  ${body}`;
+}
+
+function vAgendaDia(){
+  const appts = DB.appointments.filter(a=>a.date===AGENDA_DAY).sort((a,b)=>a.time.localeCompare(b.time));
+  return `<div class="daynav">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,-1);render()">${IC.left}</button>
     <input type="date" value="${AGENDA_DAY}" onchange="AGENDA_DAY=this.value;render()">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,1);render()">${IC.right}</button>
@@ -451,6 +468,120 @@ function vAgenda(){
     </div>`;
   }).join("")+`</div>`}`;
 }
+
+function startOfWeek(iso){
+  const d = new Date(iso+"T00:00:00");
+  const dow = d.getDay(); // 0=domingo
+  d.setDate(d.getDate()-dow);
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function vAgendaSemana(){
+  const start = startOfWeek(AGENDA_DAY);
+  const days = Array.from({length:7},(_,i)=>addDays(start,i));
+  const dowNames = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+  const t = todayISO();
+  return `<div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,-7);render()">${IC.left}</button>
+    <span style="font-size:13px;font-weight:600;color:#334155">${fmtDate(days[0])} – ${fmtDate(days[6])}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,7);render()">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(7,1fr);gap:6px">
+    ${days.map((d,i)=>{
+      const dayAppts = DB.appointments.filter(a=>a.date===d && a.status!=="cancelado").sort((a,b)=>a.time.localeCompare(b.time));
+      const isToday = d===t;
+      return `<div class="card" style="padding:8px;min-height:120px;${isToday?"border-color:var(--teal-700);border-width:2px":""}">
+        <div style="text-align:center;margin-bottom:6px">
+          <div style="font-size:10px;color:var(--mut);font-weight:600">${dowNames[i]}</div>
+          <button onclick="AGENDA_DAY='${d}';AGENDA_VIEW='dia';render()" style="font-size:13px;font-weight:700;color:${isToday?"var(--teal-700)":"var(--ink)"}">${d.slice(8)}</button>
+        </div>
+        ${dayAppts.length===0?`<div style="text-align:center;font-size:11px;color:#cbd5e1;padding:6px 0">livre</div>`:
+          dayAppts.slice(0,4).map(a=>{
+            const prof = a.profissionalId?profById(a.profissionalId):null;
+            return `<div style="font-size:10px;background:${prof?prof.cor+"22":"#f1f5f9"};border-left:2px solid ${prof?prof.cor:"#94a3b8"};border-radius:4px;padding:3px 5px;margin-bottom:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${esc(pName(a.patientId))} - ${esc(a.procedure)}">
+              <b>${a.time}</b> ${esc(pName(a.patientId).split(" ")[0])}
+            </div>`;
+          }).join("") + (dayAppts.length>4?`<div style="font-size:10px;color:var(--mut);text-align:center">+${dayAppts.length-4} mais</div>`:"")
+        }
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
+function vAgendaMes(){
+  const [y,m] = AGENDA_DAY.split("-").map(Number);
+  const first = new Date(y, m-1, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const t = todayISO();
+  const monthNames = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+  const cells = [];
+  for(let i=0;i<startDow;i++) cells.push(null);
+  for(let day=1;day<=daysInMonth;day++) cells.push(day);
+  function shiftMonth(delta){
+    const d = new Date(y, m-1+delta, 1);
+    AGENDA_DAY = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-01";
+    render();
+  }
+  window._shiftMonth = shiftMonth;
+  return `<div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_shiftMonth(-1)">${IC.left}</button>
+    <span style="font-size:14px;font-weight:700;color:#334155">${monthNames[m-1]} ${y}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_shiftMonth(1)">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px">
+    ${["D","S","T","Q","Q","S","S"].map(d=>`<div style="text-align:center;font-size:11px;font-weight:700;color:var(--mut)">${d}</div>`).join("")}
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(7,1fr);gap:4px">
+    ${cells.map(day=>{
+      if(!day) return `<div></div>`;
+      const iso = `${y}-${String(m).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+      const count = DB.appointments.filter(a=>a.date===iso && a.status!=="cancelado").length;
+      const isToday = iso===t;
+      return `<button onclick="AGENDA_DAY='${iso}';AGENDA_VIEW='dia';render()" class="card" style="padding:8px 4px;min-height:54px;text-align:center;cursor:pointer;${isToday?"border-color:var(--teal-700);border-width:2px":""}">
+        <div style="font-size:12px;font-weight:${isToday?"700":"500"};color:${isToday?"var(--teal-700)":"var(--ink)"}">${day}</div>
+        ${count>0?`<div style="margin-top:3px;font-size:10px;background:var(--teal-100);color:var(--teal-800);border-radius:99px;padding:1px 6px;display:inline-block">${count}</div>`:""}
+      </button>`;
+    }).join("")}
+  </div>`;
+}
+
+function vAgendaAno(){
+  const y = parseInt(AGENDA_DAY.split("-")[0]);
+  const monthNames = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const counts = Array.from({length:12},()=>0);
+  DB.appointments.forEach(a=>{
+    if(a.status==="cancelado") return;
+    const [ay,am] = a.date.split("-").map(Number);
+    if(ay===y) counts[am-1]++;
+  });
+  const max = Math.max(1,...counts);
+  function heat(n){
+    if(n===0) return "#f1f5f9";
+    const pct = n/max;
+    if(pct>.75) return "var(--teal-700)";
+    if(pct>.5) return "#2dd4bf";
+    if(pct>.25) return "#99f6e4";
+    return "var(--teal-100)";
+  }
+  return `<div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY='${y-1}-01-01';render()">${IC.left}</button>
+    <span style="font-size:14px;font-weight:700;color:#334155">${y}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY='${y+1}-01-01';render()">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
+  </div>
+  <div class="grid g3" style="gap:10px">
+    ${monthNames.map((mn,i)=>{
+      const c = counts[i];
+      return `<button class="card" onclick="AGENDA_DAY='${y}-${String(i+1).padStart(2,"0")}-01';AGENDA_VIEW='mes';render()" style="text-align:left;background:${heat(c)};${c>max*0.5?"color:#fff":""}">
+        <div style="font-weight:700;font-size:14px">${mn}</div>
+        <div style="font-size:12px;opacity:.85">${c} consulta${c===1?"":"s"}</div>
+      </button>`;
+    }).join("")}
+  </div>`;
+}
+
 async function setApptStatus(id,status){
   const a = DB.appointments.find(x=>x.id===id);
   await api("PUT",`/appointments/${id}`,{...a,status});
@@ -786,10 +917,36 @@ async function delProf(id){
 ════════════════════════════════════════════ */
 function vSettings(){
   const s=DB.settings;
+  const notifAtivas = s.notifAtivas !== "false";
   return header("Ajustes","Configurações gerais e modelos de mensagem.")+`
   <div class="card" style="margin-bottom:12px"><h2>Geral</h2>
     <label class="f"><span>Link de avaliação no Google</span><input id="s-link" value="${esc(s.googleReviewLink||"")}"></label>
     <label class="f"><span>Meses sem visita para paciente inativo</span><input type="number" min="1" id="s-months" value="${s.inactivityMonths||6}" style="max-width:110px"></label>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <h2>Notificações de agenda 🔔</h2>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Receba um alerta no celular antes de cada consulta agendada, mesmo com o app fechado.</p>
+    <div class="row" style="border:none;padding:0 0 12px">
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">Notificações neste dispositivo</div>
+        <div class="meta" id="push-status">${PUSH_SUPPORTED ? "Verificando..." : "Não suportado neste navegador."}</div>
+      </div>
+      <button class="btn ${PUSH_SUBSCRIBED?"ghost":""} sm" id="push-toggle-btn" onclick="togglePush()" ${PUSH_SUPPORTED?"":"disabled"}>${PUSH_SUBSCRIBED?"Desativar":"Ativar"}</button>
+    </div>
+    <label class="f"><span>Avisar com quanto tempo de antecedência</span>
+      <select id="s-notif-min" style="max-width:200px">
+        <option value="15" ${s.notifLembreteMinutos==="15"?"selected":""}>15 minutos antes</option>
+        <option value="30" ${s.notifLembreteMinutos==="30"?"selected":""}>30 minutos antes</option>
+        <option value="60" ${(!s.notifLembreteMinutos||s.notifLembreteMinutos==="60")?"selected":""}>1 hora antes</option>
+        <option value="120" ${s.notifLembreteMinutos==="120"?"selected":""}>2 horas antes</option>
+        <option value="1440" ${s.notifLembreteMinutos==="1440"?"selected":""}>1 dia antes</option>
+      </select>
+    </label>
+    <label class="f" style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <input type="checkbox" id="s-notif-ativas" ${notifAtivas?"checked":""} style="width:auto">
+      <span style="margin:0">Notificações ativas para toda a clínica</span>
+    </label>
+    <button class="btn ghost sm" onclick="testPush()" ${PUSH_SUBSCRIBED?"":"disabled"}>${IC.send} Enviar notificação de teste</button>
   </div>
   <div class="card" style="margin-bottom:12px"><h2>Modelos de mensagem (WhatsApp)</h2>
     <label class="f"><span>Confirmação — {nome} {procedimento} {data} {hora}</span><textarea id="s-confirm" rows="4">${esc(s.msgConfirm||"")}</textarea></label>
@@ -798,9 +955,12 @@ function vSettings(){
     <label class="f"><span>Avaliação Google — {nome} {link}</span><textarea id="s-review" rows="4">${esc(s.msgReview||"")}</textarea></label>
     <label class="f"><span>Aniversário — {nome}</span><textarea id="s-bday" rows="3">${esc(s.msgAniversario||"")}</textarea></label>
   </div>
-  <div class="card" style="margin-bottom:12px"><h2>Migração de dados</h2>
-    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Importe dados do CRM antigo (backup .json).</p>
-    <button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>
+  <div class="card" style="margin-bottom:12px"><h2>Backup e migração de dados</h2>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Exporte todos os dados para guardar uma cópia, ou importe um backup de outro dispositivo/versão.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn ghost sm" onclick="exportBackup()">${IC.upload} Exportar backup (.json)</button>
+      <button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>
+    </div>
     <input type="file" id="importFile" accept=".json" style="display:none" onchange="importBackup(this)">
   </div>
   <button class="btn" onclick="saveSettings()">Salvar ajustes</button>`;
@@ -810,9 +970,21 @@ async function saveSettings(){
   await api("PUT","/settings",{
     googleReviewLink:g("s-link").trim(), inactivityMonths:g("s-months"),
     msgConfirm:g("s-confirm"), msgReactivate:g("s-react"), msgSurvey:g("s-survey"),
-    msgReview:g("s-review"), msgAniversario:g("s-bday")
+    msgReview:g("s-review"), msgAniversario:g("s-bday"),
+    notifLembreteMinutos:g("s-notif-min"), notifAtivas: document.getElementById("s-notif-ativas").checked?"true":"false"
   });
   await reloadAll(); toast("Ajustes salvos.");
+}
+async function exportBackup(){
+  const data = await api("GET","/dump");
+  const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = todayISO();
+  a.href = url; a.download = `backup-crm-moura-${stamp}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast("Backup exportado!");
 }
 async function importBackup(input){
   const f=input.files[0]; if(!f)return;
@@ -826,6 +998,67 @@ async function importBackup(input){
     }catch(e){ toast("Arquivo inválido."); }
   };
   reader.readAsText(f); input.value="";
+}
+
+/* ════════════════════════════════════════════
+   PUSH NOTIFICATIONS (cliente)
+════════════════════════════════════════════ */
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g,"+").replace(/_/g,"/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
+async function checkPushStatus(){
+  if(!PUSH_SUPPORTED) return;
+  try{
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    PUSH_SUBSCRIBED = !!sub;
+  }catch(e){ PUSH_SUBSCRIBED = false; }
+  const statusEl = document.getElementById("push-status");
+  const btnEl = document.getElementById("push-toggle-btn");
+  if(statusEl) statusEl.textContent = PUSH_SUBSCRIBED ? "Ativadas neste dispositivo ✓" : "Desativadas neste dispositivo";
+  if(btnEl){ btnEl.textContent = PUSH_SUBSCRIBED?"Desativar":"Ativar"; btnEl.classList.toggle("ghost",PUSH_SUBSCRIBED); }
+  const testBtn = document.querySelector("button[onclick='testPush()']");
+  if(testBtn) testBtn.disabled = !PUSH_SUBSCRIBED;
+}
+async function togglePush(){
+  if(!PUSH_SUPPORTED){ toast("Seu navegador não suporta notificações push."); return; }
+  const reg = await navigator.serviceWorker.ready;
+  if(PUSH_SUBSCRIBED){
+    const sub = await reg.pushManager.getSubscription();
+    if(sub){
+      await api("POST","/push/unsubscribe",{endpoint:sub.endpoint});
+      await sub.unsubscribe();
+    }
+    PUSH_SUBSCRIBED=false; toast("Notificações desativadas.");
+  } else {
+    const perm = await Notification.requestPermission();
+    if(perm!=="granted"){ toast("Permissão de notificação negada."); return; }
+    const {publicKey} = await api("GET","/push/vapid-public-key");
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly:true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+    await api("POST","/push/subscribe",{
+      endpoint:sub.endpoint,
+      keys:{ p256dh: arrayBufferToBase64(sub.getKey("p256dh")), auth: arrayBufferToBase64(sub.getKey("auth")) },
+      profissionalId: CHAT_PROF_ID, label: navigator.userAgent.slice(0,60)
+    });
+    PUSH_SUBSCRIBED=true; toast("Notificações ativadas!");
+  }
+  render();
+}
+function arrayBufferToBase64(buffer){
+  const bytes = new Uint8Array(buffer);
+  let str="";
+  for(const b of bytes) str+=String.fromCharCode(b);
+  return btoa(str).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+async function testPush(){
+  const r = await api("POST","/push/test",{profissionalId: CHAT_PROF_ID});
+  toast(r.sent>0 ? `Notificação enviada (${r.sent}).` : "Nenhuma inscrição ativa encontrada.");
 }
 
 /* ════════════════════════════════════════════
@@ -849,7 +1082,13 @@ function modal(title,body){
 }
 function closeModal(){ document.getElementById("modalBg")?.remove(); }
 
-if("serviceWorker" in navigator){ window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{})); }
+if("serviceWorker" in navigator){
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("sw.js").then(()=>{
+      checkPushStatus().then(()=>{ if(TAB==="settings") render(); });
+    }).catch(()=>{});
+  });
+}
 
 /* ── inicialização ── */
 reloadAll();
