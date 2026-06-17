@@ -29,6 +29,7 @@ class Paciente(Base):
     email: Mapped[str] = mapped_column(String(120), default="")
     birth: Mapped[str | None] = mapped_column(String(10), nullable=True)
     lastVisit: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    numProntuario: Mapped[str] = mapped_column(String(30), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     reactivateSentAt: Mapped[str | None] = mapped_column(String(10), nullable=True)
     birthdaySentYear: Mapped[str | None] = mapped_column(String(4), nullable=True)  # ano do último envio de aniversário
@@ -91,3 +92,23 @@ class Config(Base):
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
 
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(255))
+    auth: Mapped[str] = mapped_column(String(255))
+    profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
+    label: Mapped[str] = mapped_column(String(100), default="")  # ex: "Celular de Richard"
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class NotificacaoEnviada(Base):
+    """Registra que já notificamos uma consulta em determinado lead time, para não duplicar envios."""
+    __tablename__ = "notificacoes_enviadas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    appointmentId: Mapped[str] = mapped_column(String(20))
+    tipo: Mapped[str] = mapped_column(String(30))  # ex: "lembrete_60min", "lembrete_dia"
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
