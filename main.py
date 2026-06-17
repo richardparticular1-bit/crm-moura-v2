@@ -1,19 +1,24 @@
 """Backend FastAPI do CRM — versão 2.0"""
 from __future__ import annotations
 
+import json
+import os
 import random
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, MensagemChat, Paciente, Pesquisa, Profissional, Tarefa
+from models import Config, Consulta, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
 
 app = FastAPI(title="CRM Moura — Backend v2")
 
@@ -26,10 +31,25 @@ app.add_middleware(
 
 FRONTEND = Path(__file__).parent / "frontend"
 
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "862sFwFCTOLC9V8QmuTpJSnEOoXEQI3tCLy1cF-vYWA")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BKC6xZ59AYX7je95otQV7O37JKcKPCSqpDV5YLaVT8X1kSiAi1lRRxgsmWISfzFAMX30_Hj0V8uv85kcqAsLeSU")
+VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
+
+scheduler = BackgroundScheduler()
+
 
 @app.on_event("startup")
 def startup():
     init_db()
+    if not scheduler.running:
+        scheduler.add_job(checar_consultas_proximas, "interval", minutes=5, id="check_appts", replace_existing=True)
+        scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown():
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 
 # ── frontend ───────────────────────────────────────────────────────────────────
@@ -128,6 +148,7 @@ class PacienteIn(BaseModel):
     email: str = ""
     birth: str | None = None
     lastVisit: str | None = None
+    numProntuario: str = ""
     notes: str = ""
     reactivateSentAt: str | None = None
     birthdaySentYear: str | None = None
@@ -470,6 +491,149 @@ def save_settings(data: dict[str, str]):
                 db.add(Config(key=k, value=v))
         db.commit()
         return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PUSH NOTIFICATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+class PushSubIn(BaseModel):
+    endpoint: str
+    keys: dict[str, str]
+    profissionalId: int | None = None
+    label: str = ""
+
+
+@app.get("/api/push/vapid-public-key")
+def get_vapid_public_key():
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/push/subscribe", status_code=201)
+def push_subscribe(data: PushSubIn):
+    with SessionLocal() as db:
+        existing = db.query(PushSubscription).filter(PushSubscription.endpoint == data.endpoint).first()
+        if existing:
+            existing.p256dh = data.keys.get("p256dh", "")
+            existing.auth = data.keys.get("auth", "")
+            existing.profissionalId = data.profissionalId
+            existing.label = data.label
+            existing.ativo = True
+            db.commit()
+            return {"ok": True, "updated": True}
+        sub = PushSubscription(
+            endpoint=data.endpoint,
+            p256dh=data.keys.get("p256dh", ""),
+            auth=data.keys.get("auth", ""),
+            profissionalId=data.profissionalId,
+            label=data.label,
+            ativo=True,
+        )
+        db.add(sub)
+        db.commit()
+        return {"ok": True, "created": True}
+
+
+class PushUnsubIn(BaseModel):
+    endpoint: str
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(data: PushUnsubIn):
+    with SessionLocal() as db:
+        db.query(PushSubscription).filter(PushSubscription.endpoint == data.endpoint).delete()
+        db.commit()
+        return {"ok": True}
+
+
+def _enviar_push(subscription: PushSubscription, title: str, body: str, url: str = "/", db=None):
+    try:
+        webpush(
+            subscription_info={
+                "endpoint": subscription.endpoint,
+                "keys": {"p256dh": subscription.p256dh, "auth": subscription.auth},
+            },
+            data=json.dumps({"title": title, "body": body, "url": url}),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims=VAPID_CLAIMS.copy(),
+        )
+        return True
+    except WebPushException as ex:
+        # Endpoint expirado/inválido (410 Gone) -> desativa a inscrição
+        if "410" in str(ex) or "404" in str(ex):
+            if db is not None:
+                subscription.ativo = False
+                db.commit()
+        return False
+
+
+class PushTestIn(BaseModel):
+    profissionalId: int | None = None
+
+
+@app.post("/api/push/test")
+def push_test(data: PushTestIn):
+    with SessionLocal() as db:
+        q = db.query(PushSubscription).filter(PushSubscription.ativo == True)  # noqa: E712
+        if data.profissionalId:
+            q = q.filter(PushSubscription.profissionalId == data.profissionalId)
+        subs = q.all()
+        sent = 0
+        for s in subs:
+            if _enviar_push(s, "CRM Moura", "Notificação de teste 🦷 — tudo funcionando!", "/", db):
+                sent += 1
+        return {"ok": True, "sent": sent, "total": len(subs)}
+
+
+def checar_consultas_proximas():
+    """Job do scheduler: roda a cada 5 minutos, verifica consultas que vão começar
+    dentro do prazo configurado (notifLembreteMinutos) e dispara push, evitando duplicar."""
+    with SessionLocal() as db:
+        ativas = db.get(Config, "notifAtivas")
+        if ativas and ativas.value == "false":
+            return
+        lembrete_cfg = db.get(Config, "notifLembreteMinutos")
+        lembrete_min = int(lembrete_cfg.value) if lembrete_cfg and lembrete_cfg.value.isdigit() else 60
+
+        agora = datetime.now()
+        janela_fim = agora + timedelta(minutes=lembrete_min)
+        janela_inicio = agora + timedelta(minutes=max(0, lembrete_min - 5))
+
+        candidatas = db.query(Consulta).filter(Consulta.status.in_(["agendado", "confirmado"])).all()
+        for a in candidatas:
+            try:
+                dt = datetime.strptime(f"{a.date} {a.time}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                continue
+            if not (janela_inicio <= dt <= janela_fim):
+                continue
+            ja_enviado = (
+                db.query(NotificacaoEnviada)
+                .filter(NotificacaoEnviada.appointmentId == a.id, NotificacaoEnviada.tipo == "lembrete")
+                .first()
+            )
+            if ja_enviado:
+                continue
+            paciente = db.get(Paciente, a.patientId)
+            nome_pac = paciente.name if paciente else "Paciente"
+            prof = db.get(Profissional, a.profissionalId) if a.profissionalId else None
+
+            subs_q = db.query(PushSubscription).filter(PushSubscription.ativo == True)  # noqa: E712
+            if a.profissionalId:
+                subs_q = subs_q.filter(
+                    (PushSubscription.profissionalId == a.profissionalId) | (PushSubscription.profissionalId.is_(None))
+                )
+            subs = subs_q.all()
+
+            titulo = f"Consulta em {lembrete_min} min"
+            corpo = f"{nome_pac} às {a.time}" + (f" — {a.procedure}" if a.procedure else "")
+            if prof:
+                corpo += f" · {prof.nome}"
+
+            for s in subs:
+                _enviar_push(s, titulo, corpo, "/", db)
+
+            db.add(NotificacaoEnviada(appointmentId=a.id, tipo="lembrete"))
+            db.commit()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
