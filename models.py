@@ -132,3 +132,17 @@ class Lancamento(Base):
     observacoes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class Evolucao(Base):
+    """Prontuário digital: evolução clínica IMUTÁVEL.
+    Registro legal — não existe endpoint de edição nem exclusão.
+    Erros são corrigidos com uma nova evolução de retificação."""
+    __tablename__ = "evolucoes"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))  # autor legal, obrigatório
+    denteRegiao: Mapped[str] = mapped_column(String(60), default="")   # ex: "2MID", "arco superior"
+    procedimento: Mapped[str] = mapped_column(String(120), default="")
+    conteudo: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
