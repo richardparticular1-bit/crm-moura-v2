@@ -195,6 +195,8 @@ let AGENDA_SEARCH = "";
 let FIN_FILTRO = "abertos"; // abertos | vencidos | pagos | todos
 let FIN_SEARCH = "";
 let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
+let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
+let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
@@ -331,7 +333,7 @@ function render(){
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
-  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, confirm:vConfirm, reactivate:vReactivate,
+  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -406,6 +408,7 @@ function vPatients(){
         <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
       </div>
       ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
+      <button class="btn ghost sm" onclick="openFicha('${p.id}')">📋 Prontuário</button>
       <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
       <button class="icon-btn del" onclick="delPatient('${p.id}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
@@ -847,6 +850,142 @@ async function delLanc(id){
   if(!confirm("Excluir este lançamento?")) return;
   await api("DELETE",`/financeiro/${id}`);
   await reloadAll(); toast("Lançamento excluído.");
+}
+
+/* ════════════════════════════════════════════
+   FICHA DO PACIENTE (prontuário digital)
+════════════════════════════════════════════ */
+async function openFicha(pid){
+  FICHA_ID = pid;
+  FICHA_EVOLUCOES = [];
+  TAB = "ficha";
+  render(); // mostra a ficha imediatamente
+  FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`);
+  if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com as evoluções carregadas
+  window.scrollTo(0,0);
+}
+function fmtDateTime(iso){
+  if(!iso) return "";
+  return fmtDate(iso.slice(0,10)) + " às " + iso.slice(11,16);
+}
+function vFicha(){
+  const p = pById(FICHA_ID);
+  if(!p) return `<button class="btn ghost" onclick="go('patients')">${IC.left} Voltar</button>` + empty("Paciente não encontrado.");
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  const consultas = DB.appointments.filter(a=>a.patientId===p.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  const lancs = (DB.lancamentos||[]).filter(l=>l.patientId===p.id).sort((a,b)=>b.vencimento.localeCompare(a.vencimento));
+  const emAberto = lancs.filter(l=>!l.pagoEm).reduce((s,l)=>s+l.valor,0);
+  const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : null;
+  return `
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="go('patients')">${IC.left}</button>
+    <div class="avatar">${initials(p.name)}</div>
+    <div class="grow">
+      <h1 style="font-size:19px">${esc(p.name)}</h1>
+      <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
+    </div>
+    <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <h2>Nova evolução clínica</h2>
+    <div class="grid g2">
+      <label class="f"><span>Dentista responsável *</span><select id="e-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+      <label class="f"><span>Dente / região</span><input id="e-dente" placeholder="Ex: 2MID, arco superior"></label>
+    </div>
+    <label class="f"><span>Procedimento</span><input id="e-proc" placeholder="Ex: Restauração em resina"></label>
+    <label class="f"><span>Evolução *</span><textarea id="e-cont" rows="3" placeholder="Descreva o atendimento, materiais, intercorrências…"></textarea></label>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="meta">🔒 Evoluções são registros legais: após salvar, não podem ser editadas nem excluídas.</span>
+      <button class="btn" onclick="saveEvolucao()">Registrar evolução</button>
+    </div>
+  </div>
+
+  ${p.notes && p.notes.trim() ? `
+  <div class="card" style="margin-bottom:12px;border-color:#fde68a;background:#fffbeb">
+    <h2>Observações antigas (campo livre)</h2>
+    <div style="font-size:13px;white-space:pre-wrap;color:#78350f;margin-bottom:10px">${esc(p.notes)}</div>
+    <button class="btn ghost sm" onclick="migrarNotas('${p.id}')">📥 Migrar para evolução</button>
+  </div>` : ""}
+
+  <div class="card" style="margin-bottom:12px">
+    <h2>Histórico de evoluções ${FICHA_EVOLUCOES.length?`(${FICHA_EVOLUCOES.length})`:""}</h2>
+    ${FICHA_EVOLUCOES.length===0
+      ? `<div style="color:var(--soft);font-size:14px;padding:6px 0">Nenhuma evolução registrada ainda.</div>`
+      : FICHA_EVOLUCOES.map(e=>`
+        <div class="row" style="align-items:flex-start">
+          <div style="min-width:110px">
+            <b style="display:block;font-size:12px;color:var(--teal-800)">${fmtDateTime(e.created_at)}</b>
+            <span class="meta" style="color:${e.profissionalCor||"var(--mut)"}">● ${esc(e.profissionalNome)}</span>
+          </div>
+          <div class="grow">
+            ${e.procedimento||e.denteRegiao?`<div style="font-weight:600;font-size:13px;margin-bottom:2px">${esc(e.procedimento)}${e.denteRegiao?` <span class="pill p-confirmado" style="font-weight:600">${esc(e.denteRegiao)}</span>`:""}</div>`:""}
+            <div style="font-size:14px;white-space:pre-wrap">${esc(e.conteudo)}</div>
+          </div>
+        </div>`).join("")}
+  </div>
+
+  <div class="grid g2" style="gap:12px;align-items:start">
+    <div class="card">
+      <h2>Consultas (${consultas.length})</h2>
+      ${consultas.length===0?`<div style="color:var(--soft);font-size:14px">Nenhuma consulta.</div>`:
+        consultas.slice(0,15).map(a=>`
+        <div class="row">
+          <div style="min-width:74px"><b style="font-size:12px;color:var(--teal-800)">${fmtDate(a.date)}</b><span class="meta" style="display:block">${a.time}</span></div>
+          <div class="grow"><div style="font-size:13px">${esc(a.procedure)}</div><div class="meta">${a.profissionalNome?esc(a.profissionalNome):""}</div></div>
+          ${pill(a.status)}
+        </div>`).join("") + (consultas.length>15?`<div class="meta" style="padding:8px 0">+${consultas.length-15} mais antigas</div>`:"")}
+    </div>
+    <div class="card">
+      <h2>Financeiro ${emAberto>0?`<span class="pill p-agendado">${fmtMoney(emAberto)} em aberto</span>`:""}</h2>
+      ${lancs.length===0?`<div style="color:var(--soft);font-size:14px">Nenhum lançamento.</div>`:
+        lancs.slice(0,15).map(l=>`
+        <div class="row">
+          <div style="min-width:74px"><b style="font-size:12px;color:${l.pagoEm?"var(--green)":"var(--rose)"}">${fmtMoney(l.valor)}</b><span class="meta" style="display:block">${l.pagoEm?"pago":"vence "+fmtDate(l.vencimento)}</span></div>
+          <div class="grow"><div style="font-size:13px">${esc(l.descricao)}</div></div>
+          ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:`<button class="btn sm" style="background:var(--green);padding:5px 10px;font-size:12px" onclick="openReceberForm('${l.id}')">Receber</button>`}
+        </div>`).join("")}
+      <button class="btn ghost sm" style="margin-top:8px" onclick="openLancFormFromFicha('${p.id}')">${IC.plus} Novo lançamento</button>
+    </div>
+  </div>`;
+}
+function openLancFormFromFicha(pid){
+  openLancForm();
+  // pré-seleciona o paciente da ficha no formulário recém-aberto
+  const sel = document.getElementById("l-pat");
+  if(sel) sel.value = pid;
+}
+async function saveEvolucao(){
+  const g=i=>document.getElementById(i)?.value;
+  if(!g("e-cont")?.trim()){ toast("Descreva a evolução."); return; }
+  if(!g("e-prof")){ toast("Selecione o dentista responsável."); return; }
+  if(!confirm("Registrar esta evolução? Após salvar, ela não poderá ser editada nem excluída.")) return;
+  await api("POST","/evolucoes",{
+    patientId: FICHA_ID,
+    profissionalId: parseInt(g("e-prof")),
+    denteRegiao: g("e-dente")||"",
+    procedimento: g("e-proc")||"",
+    conteudo: g("e-cont").trim(),
+  });
+  FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(FICHA_ID)}`);
+  render(); toast("Evolução registrada. 📋");
+}
+async function migrarNotas(pid){
+  const p = pById(pid); if(!p || !p.notes?.trim()) return;
+  const profSel = document.getElementById("e-prof");
+  const profId = profSel ? parseInt(profSel.value) : null;
+  if(!profId){ toast("Selecione o dentista no formulário acima antes de migrar."); return; }
+  if(!confirm("Copiar as observações antigas para uma evolução? O campo de observações será limpo após a migração.")) return;
+  await api("POST","/evolucoes",{
+    patientId: pid, profissionalId: profId,
+    denteRegiao: "", procedimento: "Migração de histórico",
+    conteudo: "[Migrado das observações do cadastro]\n\n" + p.notes.trim(),
+  });
+  await api("PUT",`/patients/${pid}`,{...p, notes:""});
+  await reloadAll();
+  FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`);
+  TAB="ficha"; FICHA_ID=pid; render();
+  toast("Histórico migrado para o prontuário.");
 }
 
 /* ════════════════════════════════════════════
