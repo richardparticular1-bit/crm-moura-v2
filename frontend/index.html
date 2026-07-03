@@ -394,8 +394,11 @@ function vDash(C){
 ════════════════════════════════════════════ */
 function vPatients(){
   const hoje = todayISO().slice(5); // MM-DD
-  const q = SEARCH_Q.toLowerCase();
-  const list = DB.patients.filter(p=>p.name.toLowerCase().includes(q)||digits(p.phone).includes(digits(q))).sort((a,b)=>a.name.localeCompare(b.name));
+  const q = SEARCH_Q.trim().toLowerCase();
+  const qd = digits(q);
+  const list = DB.patients.filter(p=>
+    !q || p.name.toLowerCase().includes(q) || (qd.length>0 && digits(p.phone).includes(qd))
+  ).sort((a,b)=>a.name.localeCompare(b.name));
   return `${header("Pacientes",DB.patients.length+" cadastrados",`<button class="btn" onclick="openPatientForm()">${IC.plus} Novo</button>`)}
   <div class="searchbar">${IC.search}<input value="${esc(SEARCH_Q)}" oninput="SEARCH_Q=this.value;renderKeepFocus(this)" placeholder="Buscar por nome ou telefone…"></div>
   ${list.length===0?empty(SEARCH_Q?"Nenhum paciente encontrado.":"Nenhum paciente cadastrado ainda."):
