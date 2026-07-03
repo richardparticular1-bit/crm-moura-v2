@@ -98,7 +98,7 @@ label.f span{display:block;font-size:12px;font-weight:600;color:#475569;margin-b
 .score-grid button:hover{background:var(--teal-100);border-color:var(--teal-300)}
 .note{font-weight:700;font-size:13px;padding:4px 12px;border-radius:99px}
 .note.hi{background:var(--green-bg);color:var(--green)}.note.mid{background:var(--amber-bg);color:var(--amber)}.note.lo{background:var(--rose-bg);color:var(--rose)}
-.toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:13px;padding:9px 16px;border-radius:99px;z-index:60;opacity:0;transition:opacity .25s;pointer-events:none}
+.toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:13px;padding:9px 16px;border-radius:99px;z-index:60;opacity:0;transition:opacity .25s;pointer-events:none;max-width:92vw;text-align:center}
 @media(min-width:768px){.toast{bottom:24px}}
 .toast.show{opacity:1}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
@@ -190,6 +190,7 @@ let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
+let AGENDA_SEARCH = "";
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
@@ -199,17 +200,26 @@ let PUSH_SUBSCRIBED = false;
 
 /* ── API helpers ── */
 async function api(method, path, body) {
+  const opts = { method, headers:{"Content-Type":"application/json"} };
+  if (body) opts.body = JSON.stringify(body);
+  let r;
   try {
-    const opts = { method, headers:{"Content-Type":"application/json"} };
-    if (body) opts.body = JSON.stringify(body);
-    const r = await fetch(API + path, opts);
-    if (!r.ok) throw new Error(await r.text());
-    if (r.status === 204) return null;
-    return r.json();
+    r = await fetch(API + path, opts);
   } catch(e) {
     toast("Erro de conexão com o servidor.");
     throw e;
   }
+  if (!r.ok) {
+    let msg = "Erro no servidor (" + r.status + ").";
+    try {
+      const j = await r.json();
+      if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : msg;
+    } catch(_) {}
+    toast(msg);
+    throw new Error(msg);
+  }
+  if (r.status === 204) return null;
+  return r.json();
 }
 
 async function reloadAll() {
@@ -251,7 +261,7 @@ const pName = id => pById(id)?.name || "Paciente removido";
 const profById = id => DB.profissionais.find(p=>p.id===id);
 const profNome = id => profById(id)?.nome || "—";
 const initials = n => (n||"?").split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
-function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2500); }
+function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),3500); }
 
 /* ── cálculos ── */
 function calc(){
@@ -423,18 +433,53 @@ async function savePatient(id){
 }
 
 /* ════════════════════════════════════════════
-   AGENDA (Dia / Semana / Mês / Ano)
+   AGENDA (Dia / Semana / Mês / Ano + Busca)
 ════════════════════════════════════════════ */
 function vAgenda(){
   const viewBtns = ["dia","semana","mes","ano"].map(v=>
     `<button class="btn ${AGENDA_VIEW===v?"":"ghost"} sm" onclick="AGENDA_VIEW='${v}';render()" style="text-transform:capitalize">${v}</button>`
   ).join("");
-  const body = AGENDA_VIEW==="dia" ? vAgendaDia() :
+  const buscando = AGENDA_SEARCH.trim().length >= 2;
+  const body = buscando ? vAgendaBusca() :
+               AGENDA_VIEW==="dia" ? vAgendaDia() :
                AGENDA_VIEW==="semana" ? vAgendaSemana() :
                AGENDA_VIEW==="mes" ? vAgendaMes() : vAgendaAno();
   return `${header("Agenda","",`<button class="btn" onclick="openApptForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Nova consulta</button>`)}
-  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${viewBtns}</div>
+  <div class="searchbar">${IC.search}<input id="agenda-search" value="${esc(AGENDA_SEARCH)}" oninput="AGENDA_SEARCH=this.value;renderKeepFocusAgenda(this)" placeholder="Buscar paciente na agenda…"></div>
+  ${buscando?"":`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${viewBtns}</div>`}
   ${body}`;
+}
+function renderKeepFocusAgenda(el){ const pos=el.selectionStart; render(); const n=document.getElementById("agenda-search"); if(n){n.focus();n.setSelectionRange(pos,pos);} }
+
+function vAgendaBusca(){
+  const q = AGENDA_SEARCH.trim().toLowerCase();
+  const t = todayISO();
+  const matches = DB.appointments
+    .filter(a=>pName(a.patientId).toLowerCase().includes(q))
+    .sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  const futuras = matches.filter(a=>a.date>=t);
+  const passadas = matches.filter(a=>a.date<t);
+  if(matches.length===0) return empty(`Nenhum agendamento encontrado para "${esc(AGENDA_SEARCH.trim())}".`);
+  const rowHTML = a=>{
+    const prof = a.profissionalId ? profById(a.profissionalId) : null;
+    return `<div class="row">
+      <div style="text-align:center;min-width:74px">
+        <b style="color:var(--teal-800);display:block;font-size:13px">${fmtDate(a.date)}</b>
+        <span class="meta" style="font-variant-numeric:tabular-nums">${a.time}${a.duracaoMinutos?` · ${a.duracaoMinutos}min`:""}</span>
+      </div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(pName(a.patientId))}</div>
+        <div class="meta">${esc(a.procedure)}${prof?` · <span style="color:${prof.cor}">● ${esc(prof.nome)}</span>`:""}</div>
+      </div>
+      ${pill(a.status)}
+      <button class="btn ghost sm" onclick="AGENDA_SEARCH='';AGENDA_DAY='${a.date}';AGENDA_VIEW='dia';render()">Ver dia</button>
+      <button class="icon-btn" onclick="openApptForm('${a.id}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delAppt('${a.id}')" aria-label="Excluir">${IC.trash}</button>
+    </div>`;
+  };
+  return `
+  ${futuras.length?`<div class="card" style="padding:4px 16px;margin-bottom:12px"><h2 style="padding-top:12px">Próximas (${futuras.length})</h2>${futuras.slice().reverse().map(rowHTML).join("")}</div>`:""}
+  ${passadas.length?`<div class="card" style="padding:4px 16px"><h2 style="padding-top:12px">Anteriores (${passadas.length})</h2>${passadas.map(rowHTML).join("")}</div>`:""}`;
 }
 
 function vAgendaDia(){
@@ -464,6 +509,7 @@ function vAgendaDia(){
       <select style="width:auto;font-size:12px;padding:6px 8px" onchange="setApptStatus('${a.id}',this.value)">
         ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}
       </select>
+      <button class="icon-btn" onclick="openApptForm('${a.id}')" aria-label="Editar">${IC.pencil}</button>
       <button class="icon-btn del" onclick="delAppt('${a.id}')">${IC.trash}</button>
     </div>`;
   }).join("")+`</div>`}`;
@@ -498,7 +544,7 @@ function vAgendaSemana(){
         ${dayAppts.length===0?`<div style="text-align:center;font-size:11px;color:#cbd5e1;padding:6px 0">livre</div>`:
           dayAppts.slice(0,4).map(a=>{
             const prof = a.profissionalId?profById(a.profissionalId):null;
-            return `<div style="font-size:10px;background:${prof?prof.cor+"22":"#f1f5f9"};border-left:2px solid ${prof?prof.cor:"#94a3b8"};border-radius:4px;padding:3px 5px;margin-bottom:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis" title="${esc(pName(a.patientId))} - ${esc(a.procedure)}">
+            return `<div style="font-size:10px;background:${prof?prof.cor+"22":"#f1f5f9"};border-left:2px solid ${prof?prof.cor:"#94a3b8"};border-radius:4px;padding:3px 5px;margin-bottom:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="${esc(pName(a.patientId))} - ${esc(a.procedure)}" onclick="openApptForm('${a.id}')">
               <b>${a.time}</b> ${esc(pName(a.patientId).split(" ")[0])}
             </div>`;
           }).join("") + (dayAppts.length>4?`<div style="font-size:10px;color:var(--mut);text-align:center">+${dayAppts.length-4} mais</div>`:"")
@@ -597,37 +643,46 @@ async function delAppt(id){
   await api("DELETE",`/appointments/${id}`);
   await reloadAll(); toast("Consulta excluída.");
 }
-function openApptForm(){
-  const ps = DB.patients.slice().sort((a,b)=>a.name.localeCompare(b.name));
-  const profs = DB.profissionais.filter(p=>p.ativo);
-  modal("Nova consulta",`
-    <label class="f"><span>Paciente</span><select id="a-pat">${ps.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select></label>
-    <label class="f"><span>Dentista responsável</span><select id="a-prof"><option value="">— Sem preferência —</option>${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
+function openApptForm(id){
+  const a = id ? DB.appointments.find(x=>x.id===id) : null;
+  const ps = DB.patients.slice().sort((x,y)=>x.name.localeCompare(y.name));
+  const profs = DB.profissionais.filter(p=>p.ativo || (a && p.id===a.profissionalId));
+  modal(a?"Editar consulta":"Nova consulta",`
+    <label class="f"><span>Paciente</span><select id="a-pat">${ps.map(p=>`<option value="${p.id}" ${a&&a.patientId===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <label class="f"><span>Dentista responsável</span><select id="a-prof"><option value="">— Sem preferência —</option>${profs.map(p=>`<option value="${p.id}" ${a&&a.profissionalId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></label>
     <div class="grid g2">
-      <label class="f"><span>Data</span><input type="date" id="a-date" value="${AGENDA_DAY}"></label>
-      <label class="f"><span>Horário</span><input type="time" id="a-time" value="09:00"></label>
+      <label class="f"><span>Data</span><input type="date" id="a-date" value="${a?a.date:AGENDA_DAY}"></label>
+      <label class="f"><span>Horário</span><input type="time" id="a-time" value="${a?a.time:"09:00"}"></label>
     </div>
     <div class="grid g2">
-      <label class="f"><span>Duração (minutos)</span><input type="number" id="a-dur" value="60" min="15" step="15"></label>
-      <label class="f"><span>Procedimento</span><select id="a-proc">${PROCEDURES.map(p=>`<option>${p}</option>`).join("")}</select></label>
+      <label class="f"><span>Duração (minutos)</span><input type="number" id="a-dur" value="${a?(a.duracaoMinutos||60):60}" min="15" step="15"></label>
+      <label class="f"><span>Procedimento</span><select id="a-proc">${PROCEDURES.map(p=>`<option ${a&&a.procedure===p?"selected":""}>${p}</option>`).join("")}</select></label>
     </div>
     <div class="grid g2">
-      <label class="f"><span>N° Prontuário</span><input id="a-pron" placeholder="Opcional"></label>
-      <label class="f"><span>N° Orçamento</span><input id="a-orc" placeholder="Opcional"></label>
+      <label class="f"><span>N° Prontuário</span><input id="a-pron" value="${a?esc(a.numProntuario||""):""}" placeholder="Opcional"></label>
+      <label class="f"><span>N° Orçamento</span><input id="a-orc" value="${a?esc(a.numOrcamento||""):""}" placeholder="Opcional"></label>
     </div>
+    ${a?`<label class="f"><span>Status</span><select id="a-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}</select></label>`:""}
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="saveAppt()">Agendar</button></div>`);
+    <button class="btn" onclick="saveAppt('${id||""}')">${a?"Salvar alterações":"Agendar"}</button></div>`);
 }
-async function saveAppt(){
+async function saveAppt(id){
   const g=i=>document.getElementById(i).value;
   if(!g("a-date")||!g("a-time")){ toast("Informe data e horário."); return; }
-  await api("POST","/appointments",{
-    patientId:g("a-pat"), profissionalId:g("a-prof")||null,
+  const payload = {
+    patientId:g("a-pat"), profissionalId:g("a-prof")?parseInt(g("a-prof")):null,
     date:g("a-date"), time:g("a-time"), duracaoMinutos:parseInt(g("a-dur"))||60,
-    procedure:g("a-proc"), numProntuario:g("a-pron"), numOrcamento:g("a-orc"),
-    status:"agendado", confirmSent:false
-  });
-  AGENDA_DAY=g("a-date"); closeModal(); await reloadAll(); toast("Consulta agendada.");
+    procedure:g("a-proc"), numProntuario:g("a-pron"), numOrcamento:g("a-orc")
+  };
+  if(id){
+    const a = DB.appointments.find(x=>x.id===id);
+    const status = document.getElementById("a-status")?.value || a.status;
+    await api("PUT",`/appointments/${id}`,{...payload, status, confirmSent:a.confirmSent});
+    closeModal(); await reloadAll(); toast("Consulta atualizada.");
+  } else {
+    await api("POST","/appointments",{...payload, status:"agendado", confirmSent:false});
+    AGENDA_DAY=g("a-date"); closeModal(); await reloadAll(); toast("Consulta agendada.");
+  }
 }
 
 /* ════════════════════════════════════════════
