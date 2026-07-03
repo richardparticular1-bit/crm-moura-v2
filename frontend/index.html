@@ -183,14 +183,18 @@ const IC = {
   chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
   prof:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   cake:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"/><line x1="2" y1="21" x2="22" y2="21"/><path d="M7 8v2"/><path d="M12 8v2"/><path d="M17 8v2"/><path d="M7 4h.01"/><path d="M12 4h.01"/><path d="M17 4h.01"/></svg>',
+  money:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
 };
 
 /* ── estado global ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[] };
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
 let AGENDA_SEARCH = "";
+let FIN_FILTRO = "abertos"; // abertos | vencidos | pagos | todos
+let FIN_SEARCH = "";
+let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
@@ -223,7 +227,7 @@ async function api(method, path, body) {
 }
 
 async function reloadAll() {
-  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
@@ -231,8 +235,9 @@ async function reloadAll() {
     api("GET", "/profissionais"),
     api("GET", "/tarefas"),
     api("GET", "/aniversariantes"),
+    api("GET", "/financeiro"),
   ]);
-  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, chat: DB.chat||[] };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, chat: DB.chat||[] };
   render();
 }
 
@@ -261,6 +266,16 @@ const pName = id => pById(id)?.name || "Paciente removido";
 const profById = id => DB.profissionais.find(p=>p.id===id);
 const profNome = id => profById(id)?.nome || "—";
 const initials = n => (n||"?").split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
+const fmtMoney = cents => (cents/100).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+function parseMoney(s){ // "1.250,50" | "1250,50" | "1250.50" | "1250" -> centavos
+  const clean = (s||"").replace(/[^\d,\.]/g,"");
+  if(!clean) return 0;
+  let normalized = clean;
+  if(clean.includes(",")) normalized = clean.replace(/\./g,"").replace(",",".");
+  const v = parseFloat(normalized);
+  return isNaN(v) ? 0 : Math.round(v*100);
+}
+const FORMAS_PGTO = { dinheiro:"Dinheiro", pix:"Pix", cartao_credito:"Cartão de crédito", cartao_debito:"Cartão de débito", boleto:"Boleto", outro:"Outro" };
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),3500); }
 
 /* ── cálculos ── */
@@ -277,8 +292,9 @@ function calc(){
   const nps = scores.length ? Math.round((scores.filter(s=>s>=9).length - scores.filter(s=>s<=6).length)/scores.length*100) : null;
   const tarefasPendentes = DB.tarefas.filter(t=>t.status!=="concluida").length;
   const aniversarios = DB.aniversariantes.length;
+  const finVencidos = (DB.lancamentos||[]).filter(l=>!l.pagoEm && l.vencimento < t).length;
   return { t, pendingConfirm, inactive, pendingSurvey, pendingReview, nps,
-    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios } };
+    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos } };
 }
 
 /* ── navegação ── */
@@ -286,6 +302,7 @@ const NAV = [
   {id:"dash",label:"Painel",ic:IC.dash},
   {id:"patients",label:"Pacientes",ic:IC.users},
   {id:"agenda",label:"Agenda",ic:IC.cal},
+  {id:"financeiro",label:"Financeiro",ic:IC.money,badge:"financeiro"},
   {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
   {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
   {id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
@@ -314,7 +331,7 @@ function render(){
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
-  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, confirm:vConfirm, reactivate:vReactivate,
+  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, confirm:vConfirm, reactivate:vReactivate,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -663,8 +680,10 @@ function openApptForm(id){
       <label class="f"><span>N° Orçamento</span><input id="a-orc" value="${a?esc(a.numOrcamento||""):""}" placeholder="Opcional"></label>
     </div>
     ${a?`<label class="f"><span>Status</span><select id="a-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}</select></label>`:""}
-    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="saveAppt('${id||""}')">${a?"Salvar alterações":"Agendar"}</button></div>`);
+    <div class="acts" style="justify-content:space-between">
+    ${a?`<button class="btn ghost" onclick="closeModal();openLancForm(null,'${a.id}')" style="color:var(--green);border-color:#a7f3d0">💰 Gerar cobrança</button>`:"<span></span>"}
+    <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveAppt('${id||""}')">${a?"Salvar alterações":"Agendar"}</button></div></div>`);
 }
 async function saveAppt(id){
   const g=i=>document.getElementById(i).value;
@@ -683,6 +702,151 @@ async function saveAppt(id){
     await api("POST","/appointments",{...payload, status:"agendado", confirmSent:false});
     AGENDA_DAY=g("a-date"); closeModal(); await reloadAll(); toast("Consulta agendada.");
   }
+}
+
+/* ════════════════════════════════════════════
+   FINANCEIRO
+════════════════════════════════════════════ */
+function _finShiftMes(delta){
+  let [y,m] = FIN_MES.split("-").map(Number);
+  m += delta;
+  if(m===0){ m=12; y--; } else if(m===13){ m=1; y++; }
+  FIN_MES = `${y}-${String(m).padStart(2,"0")}`;
+  render();
+}
+function vFinanceiro(C){
+  const t = C.t;
+  const L = DB.lancamentos || [];
+  const mesLabel = (()=>{ const [y,m]=FIN_MES.split("-").map(Number);
+    return ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"][m-1]+" "+y; })();
+  // Resumo do mês selecionado
+  const recebidoMes = L.filter(l=>l.pagoEm && l.pagoEm.slice(0,7)===FIN_MES).reduce((s,l)=>s+l.valor,0);
+  const aReceberMes = L.filter(l=>!l.pagoEm && l.vencimento.slice(0,7)===FIN_MES).reduce((s,l)=>s+l.valor,0);
+  const vencidos = L.filter(l=>!l.pagoEm && l.vencimento < t);
+  const vencidoTotal = vencidos.reduce((s,l)=>s+l.valor,0);
+  // Lista filtrada
+  const q = FIN_SEARCH.trim().toLowerCase();
+  let list = L.filter(l=>!q || (l.patientName||"").toLowerCase().includes(q) || (l.descricao||"").toLowerCase().includes(q));
+  if(FIN_FILTRO==="abertos") list = list.filter(l=>!l.pagoEm);
+  else if(FIN_FILTRO==="vencidos") list = list.filter(l=>!l.pagoEm && l.vencimento < t);
+  else if(FIN_FILTRO==="pagos") list = list.filter(l=>l.pagoEm);
+  list = list.slice().sort((a,b)=>{
+    if(!a.pagoEm && !b.pagoEm) return a.vencimento.localeCompare(b.vencimento); // abertos: vence antes primeiro
+    return (b.pagoEm||b.vencimento).localeCompare(a.pagoEm||a.vencimento);
+  });
+  const filtros = [["abertos","Em aberto"],["vencidos","Vencidos"],["pagos","Pagos"],["todos","Todos"]].map(([k,lab])=>
+    `<button class="btn ${FIN_FILTRO===k?"":"ghost"} sm" onclick="FIN_FILTRO='${k}';render()">${lab}</button>`).join("");
+  const rowHTML = l=>{
+    const vencido = !l.pagoEm && l.vencimento < t;
+    return `<div class="row">
+      <div style="text-align:center;min-width:78px">
+        <b style="display:block;font-size:13px;color:${l.pagoEm?"var(--green)":vencido?"var(--rose)":"var(--teal-800)"}">${fmtMoney(l.valor)}</b>
+        <span class="meta">${l.pagoEm?"pago "+fmtDate(l.pagoEm):"vence "+fmtDate(l.vencimento)}</span>
+      </div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(l.patientName)}</div>
+        <div class="meta">${esc(l.descricao)||"Sem descrição"}${l.profissionalNome?` · ${esc(l.profissionalNome)}`:""}${l.numOrcamento?` · Orç: ${esc(l.numOrcamento)}`:""}${l.pagoEm&&l.formaPagamento?` · ${FORMAS_PGTO[l.formaPagamento]||esc(l.formaPagamento)}`:""}</div>
+      </div>
+      ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:vencido?`<span class="pill p-faltou">Vencido</span>`:`<span class="pill p-agendado">Em aberto</span>`}
+      ${l.pagoEm
+        ? `<button class="btn ghost sm" onclick="estornarLanc('${l.id}')">Estornar</button>`
+        : `<button class="btn sm" style="background:var(--green)" onclick="openReceberForm('${l.id}')">Receber</button>`}
+      <button class="icon-btn" onclick="openLancForm('${l.id}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delLanc('${l.id}')" aria-label="Excluir">${IC.trash}</button>
+    </div>`;
+  };
+  return `${header("Financeiro","Cobranças, parcelas e recebimentos.",`<button class="btn" onclick="openLancForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo lançamento</button>`)}
+  <div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_finShiftMes(-1)">${IC.left}</button>
+    <span style="font-size:14px;font-weight:700;color:#334155">${mesLabel}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_finShiftMes(1)">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="FIN_MES=todayISO().slice(0,7);render()">Mês atual</button>
+  </div>
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat good"><b>${fmtMoney(recebidoMes)}</b><span>Recebido no mês</span></div>
+    <div class="stat"><b>${fmtMoney(aReceberMes)}</b><span>A receber no mês</span></div>
+    <button class="stat ${vencidos.length?"warn":""}" onclick="FIN_FILTRO='vencidos';render()" style="cursor:pointer"><b style="${vencidos.length?"color:var(--rose)":""}">${fmtMoney(vencidoTotal)}</b><span>Vencido (${vencidos.length})</span></button>
+  </div>
+  <div class="searchbar">${IC.search}<input id="fin-search" value="${esc(FIN_SEARCH)}" oninput="FIN_SEARCH=this.value;renderKeepFocusFin(this)" placeholder="Buscar por paciente ou descrição…"></div>
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${filtros}</div>
+  ${list.length===0?empty(L.length===0?"Nenhum lançamento ainda. Crie o primeiro!":"Nenhum lançamento neste filtro."):
+  `<div class="card" style="padding:4px 16px">`+list.map(rowHTML).join("")+`</div>`}`;
+}
+function renderKeepFocusFin(el){ const pos=el.selectionStart; render(); const n=document.getElementById("fin-search"); if(n){n.focus();n.setSelectionRange(pos,pos);} }
+
+function openLancForm(id, apptId){
+  const l = id ? DB.lancamentos.find(x=>x.id===id) : null;
+  const appt = apptId ? DB.appointments.find(x=>x.id===apptId) : null;
+  const ps = DB.patients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const profs = DB.profissionais.filter(p=>p.ativo || (l && p.id===l.profissionalId));
+  const selPat = l ? l.patientId : (appt ? appt.patientId : "");
+  const selProf = l ? l.profissionalId : (appt ? appt.profissionalId : "");
+  const desc = l ? l.descricao : (appt ? appt.procedure : "");
+  const orc = l ? (l.numOrcamento||"") : (appt ? (appt.numOrcamento||"") : "");
+  modal(l?"Editar lançamento":"Novo lançamento",`
+    <label class="f"><span>Paciente *</span><select id="l-pat">${ps.map(p=>`<option value="${p.id}" ${selPat===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <label class="f"><span>Dentista</span><select id="l-prof"><option value="">— Nenhum —</option>${profs.map(p=>`<option value="${p.id}" ${selProf===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Descrição *</span><input id="l-desc" value="${esc(desc)}" placeholder="Ex: Restauração 2MID"></label>
+    <div class="grid g2">
+      <label class="f"><span>Valor total (R$) *</span><input id="l-valor" inputmode="decimal" value="${l?(l.valor/100).toFixed(2).replace(".",","):""}" placeholder="150,00"></label>
+      <label class="f"><span>${l?"Vencimento":"1º vencimento"}</span><input type="date" id="l-venc" value="${l?l.vencimento:todayISO()}"></label>
+    </div>
+    ${l?"":`<label class="f"><span>Parcelas</span><select id="l-parc">${Array.from({length:12},(_,i)=>`<option value="${i+1}">${i+1}x${i>0?" (mensais)":""}</option>`).join("")}</select></label>`}
+    <div class="grid g2">
+      <label class="f"><span>N° Orçamento</span><input id="l-orc" value="${esc(orc)}" placeholder="Opcional"></label>
+      <label class="f"><span>Observações</span><input id="l-obs" value="${l?esc(l.observacoes||""):""}" placeholder="Opcional"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveLanc('${id||""}','${apptId||""}')">${l?"Salvar":"Criar"}</button></div>`);
+}
+async function saveLanc(id, apptId){
+  const g=i=>document.getElementById(i)?.value;
+  const valor = parseMoney(g("l-valor"));
+  if(!g("l-desc").trim()){ toast("Informe a descrição."); return; }
+  if(valor<=0){ toast("Informe um valor válido."); return; }
+  if(!g("l-venc")){ toast("Informe o vencimento."); return; }
+  const payload = {
+    patientId:g("l-pat"), profissionalId:g("l-prof")?parseInt(g("l-prof")):null,
+    appointmentId: apptId||null,
+    descricao:g("l-desc").trim(), valor, vencimento:g("l-venc"),
+    numOrcamento:g("l-orc")||"", observacoes:g("l-obs")||"",
+  };
+  if(id){
+    const l = DB.lancamentos.find(x=>x.id===id);
+    await api("PUT",`/financeiro/${id}`,{...payload, appointmentId:l.appointmentId, pagoEm:l.pagoEm, formaPagamento:l.formaPagamento});
+    closeModal(); await reloadAll(); toast("Lançamento atualizado.");
+  } else {
+    const parcelas = parseInt(g("l-parc"))||1;
+    await api("POST","/financeiro",{...payload, pagoEm:null, formaPagamento:"", parcelas});
+    closeModal(); if(TAB!=="financeiro") go("financeiro"); else await reloadAll();
+    toast(parcelas>1?`${parcelas} parcelas criadas.`:"Lançamento criado.");
+  }
+}
+function openReceberForm(id){
+  const l = DB.lancamentos.find(x=>x.id===id); if(!l) return;
+  modal("Receber pagamento",`
+    <p style="font-size:14px;margin-bottom:14px"><b>${esc(l.patientName)}</b> · ${esc(l.descricao)} · <b style="color:var(--teal-800)">${fmtMoney(l.valor)}</b></p>
+    <div class="grid g2">
+      <label class="f"><span>Forma de pagamento</span><select id="r-forma">${Object.entries(FORMAS_PGTO).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+      <label class="f"><span>Data do recebimento</span><input type="date" id="r-data" value="${todayISO()}"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" style="background:var(--green)" onclick="receberLanc('${id}')">Confirmar recebimento</button></div>`);
+}
+async function receberLanc(id){
+  const g=i=>document.getElementById(i).value;
+  await api("PUT",`/financeiro/${id}/receber`,{formaPagamento:g("r-forma"), pagoEm:g("r-data")||null});
+  closeModal(); await reloadAll(); toast("Recebimento registrado. 💰");
+}
+async function estornarLanc(id){
+  if(!confirm("Estornar este recebimento? O lançamento voltará para 'em aberto'.")) return;
+  await api("PUT",`/financeiro/${id}/estornar`);
+  await reloadAll(); toast("Recebimento estornado.");
+}
+async function delLanc(id){
+  if(!confirm("Excluir este lançamento?")) return;
+  await api("DELETE",`/financeiro/${id}`);
+  await reloadAll(); toast("Lançamento excluído.");
 }
 
 /* ════════════════════════════════════════════
