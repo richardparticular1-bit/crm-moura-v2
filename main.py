@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
+from models import Config, Consulta, Lancamento, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
 
 app = FastAPI(title="CRM Moura — Backend v2.1")
 
@@ -738,6 +738,148 @@ def checar_consultas_proximas():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# FINANCEIRO  (lançamentos: cobranças e parcelas; valor em CENTAVOS)
+# ══════════════════════════════════════════════════════════════════════════════
+class LancamentoIn(BaseModel):
+    id: str | None = None
+    patientId: str
+    profissionalId: int | None = None
+    appointmentId: str | None = None
+    descricao: str = ""
+    valor: int = 0  # centavos
+    vencimento: str
+    pagoEm: str | None = None
+    formaPagamento: str = ""
+    numOrcamento: str = ""
+    observacoes: str = ""
+    parcelas: int = 1  # somente na criação: >1 divide o valor em N lançamentos mensais
+
+
+def _add_meses(iso: str, n: int) -> str:
+    """Soma n meses a uma data ISO, ajustando o dia ao fim do mês quando necessário."""
+    y, m, d = (int(x) for x in iso.split("-"))
+    m += n
+    y += (m - 1) // 12
+    m = (m - 1) % 12 + 1
+    # dias no mês destino
+    if m == 12:
+        dias_mes = 31
+    else:
+        from datetime import date as _date
+        dias_mes = (_date(y, m + 1, 1) - _date(y, m, 1)).days
+    d = min(d, dias_mes)
+    return f"{y:04d}-{m:02d}-{d:02d}"
+
+
+def _lanc_row(db, l: Lancamento) -> dict[str, Any]:
+    r = _row(l)
+    pac = db.get(Paciente, l.patientId)
+    r["patientName"] = pac.name if pac else "Paciente removido"
+    if l.profissionalId:
+        prof = db.get(Profissional, l.profissionalId)
+        r["profissionalNome"] = prof.nome if prof else ""
+    else:
+        r["profissionalNome"] = ""
+    return r
+
+
+@app.get("/api/financeiro")
+def list_lancamentos():
+    with SessionLocal() as db:
+        rows = db.query(Lancamento).order_by(Lancamento.vencimento.desc()).all()
+        return [_lanc_row(db, l) for l in rows]
+
+
+@app.post("/api/financeiro", status_code=201)
+def create_lancamento(data: LancamentoIn):
+    if data.valor <= 0:
+        raise HTTPException(422, "Informe um valor maior que zero.")
+    n = max(1, min(24, data.parcelas))
+    with SessionLocal() as db:
+        criados = []
+        base = data.valor // n
+        resto = data.valor - base * n  # primeira parcela absorve o resto da divisão
+        for i in range(n):
+            valor_i = base + (resto if i == 0 else 0)
+            desc = data.descricao
+            if n > 1:
+                desc = f"{data.descricao} ({i+1}/{n})"
+            l = Lancamento(
+                id=_new_id(),
+                patientId=data.patientId,
+                profissionalId=data.profissionalId,
+                appointmentId=data.appointmentId,
+                descricao=desc,
+                valor=valor_i,
+                vencimento=_add_meses(data.vencimento, i),
+                pagoEm=None,
+                formaPagamento="",
+                numOrcamento=data.numOrcamento,
+                observacoes=data.observacoes,
+            )
+            db.add(l)
+            criados.append(l)
+        db.commit()
+        return [_lanc_row(db, l) for l in criados]
+
+
+@app.put("/api/financeiro/{lid}")
+def update_lancamento(lid: str, data: LancamentoIn):
+    with SessionLocal() as db:
+        l = db.get(Lancamento, lid)
+        if not l:
+            raise HTTPException(404, "Lançamento não encontrado")
+        for k, v in data.model_dump(exclude={"id", "parcelas"}).items():
+            setattr(l, k, v)
+        db.commit()
+        db.refresh(l)
+        return _lanc_row(db, l)
+
+
+class ReceberIn(BaseModel):
+    formaPagamento: str = "dinheiro"
+    pagoEm: str | None = None  # default: hoje
+
+
+@app.put("/api/financeiro/{lid}/receber")
+def receber_lancamento(lid: str, data: ReceberIn):
+    from datetime import date
+    with SessionLocal() as db:
+        l = db.get(Lancamento, lid)
+        if not l:
+            raise HTTPException(404, "Lançamento não encontrado")
+        l.pagoEm = data.pagoEm or date.today().isoformat()
+        l.formaPagamento = data.formaPagamento
+        db.commit()
+        db.refresh(l)
+        return _lanc_row(db, l)
+
+
+@app.put("/api/financeiro/{lid}/estornar")
+def estornar_lancamento(lid: str):
+    """Desfaz um recebimento marcado por engano (volta para 'em aberto')."""
+    with SessionLocal() as db:
+        l = db.get(Lancamento, lid)
+        if not l:
+            raise HTTPException(404, "Lançamento não encontrado")
+        l.pagoEm = None
+        l.formaPagamento = ""
+        db.commit()
+        db.refresh(l)
+        return _lanc_row(db, l)
+
+
+@app.delete("/api/financeiro/{lid}", status_code=204)
+def delete_lancamento(lid: str):
+    with SessionLocal() as db:
+        l = db.get(Lancamento, lid)
+        if not l:
+            raise HTTPException(404)
+        db.delete(l)
+        db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # DUMP / IMPORT
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/dump")
@@ -749,6 +891,7 @@ def dump():
             "surveys": [_row(s) for s in db.query(Pesquisa).all()],
             "profissionais": [_row(p) for p in db.query(Profissional).all()],
             "tarefas": [_row(t) for t in db.query(Tarefa).all()],
+            "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
             "settings": {c.key: c.value for c in db.query(Config).all()},
         }
 
@@ -757,6 +900,7 @@ class DumpIn(BaseModel):
     patients: list[dict] = []
     appointments: list[dict] = []
     surveys: list[dict] = []
+    lancamentos: list[dict] = []
     settings: dict[str, Any] = {}
 
 
@@ -772,6 +916,9 @@ def import_dump(data: DumpIn):
         for s in data.surveys:
             if not db.get(Pesquisa, s["id"]):
                 db.add(Pesquisa(**{k: v for k, v in s.items() if hasattr(Pesquisa, k)}))
+        for l in data.lancamentos:
+            if not db.get(Lancamento, l["id"]):
+                db.add(Lancamento(**{k: v for k, v in l.items() if hasattr(Lancamento, k)}))
         for k, v in data.settings.items():
             cfg = db.get(Config, k)
             if cfg:
