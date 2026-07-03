@@ -1,4 +1,8 @@
-"""Backend FastAPI do CRM — versão 2.0"""
+"""Backend FastAPI do CRM — versão 2.1
+Novidades v2.1:
+  - GET /api/appointments/search?q=  → busca agendamentos pelo nome do paciente
+  - Validação de conflito de horário ao criar/editar consulta (409 Conflict)
+"""
 from __future__ import annotations
 
 import json
@@ -20,7 +24,7 @@ from pywebpush import webpush, WebPushException
 from database import SessionLocal, init_db
 from models import Config, Consulta, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
 
-app = FastAPI(title="CRM Moura — Backend v2")
+app = FastAPI(title="CRM Moura — Backend v2.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,6 +88,44 @@ def _row(obj) -> dict[str, Any]:
 
 def _new_id() -> str:
     return str(random.randint(100000, 999999)) + str(int(time.time()))[-4:]
+
+
+def _minutos(hhmm: str) -> int | None:
+    """'14:30' → 870. Retorna None se o formato for inválido."""
+    try:
+        h, m = hhmm.split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _consulta_conflitante(db, data: "ConsultaIn", exclude_id: str | None = None) -> Consulta | None:
+    """Verifica se já existe consulta do MESMO profissional, na MESMA data,
+    com horário sobreposto. Retorna a consulta conflitante ou None.
+    Consultas canceladas não contam como conflito."""
+    if not data.profissionalId:
+        return None
+    inicio_novo = _minutos(data.time)
+    if inicio_novo is None:
+        return None
+    fim_novo = inicio_novo + (data.duracaoMinutos or 60)
+
+    q = db.query(Consulta).filter(
+        Consulta.profissionalId == data.profissionalId,
+        Consulta.date == data.date,
+        Consulta.status != "cancelado",
+    )
+    if exclude_id:
+        q = q.filter(Consulta.id != exclude_id)
+
+    for c in q.all():
+        inicio_c = _minutos(c.time)
+        if inicio_c is None:
+            continue
+        fim_c = inicio_c + (c.duracaoMinutos or 60)
+        if inicio_novo < fim_c and inicio_c < fim_novo:  # sobreposição
+            return c
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -196,7 +238,7 @@ def delete_patient(pid: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CONSULTAS  (agora com profissional, prontuário, orçamento, duração)
+# CONSULTAS  (com profissional, prontuário, orçamento, duração)
 # ══════════════════════════════════════════════════════════════════════════════
 class ConsultaIn(BaseModel):
     id: str | None = None
@@ -210,6 +252,47 @@ class ConsultaIn(BaseModel):
     procedure: str = "Avaliação"
     status: str = "agendado"
     confirmSent: bool = False
+
+
+# IMPORTANTE: esta rota fica ANTES de qualquer rota /api/appointments/{aid}
+@app.get("/api/appointments/search")
+def search_appointments(q: str, limit: int = 50):
+    """Busca agendamentos pelo nome do paciente (parcial, sem case).
+    Retorna ordenado por data/hora, com nome do paciente e do profissional."""
+    termo = (q or "").strip()
+    if len(termo) < 2:
+        return []
+    with SessionLocal() as db:
+        pacientes = (
+            db.query(Paciente)
+            .filter(Paciente.name.ilike(f"%{termo}%"))
+            .all()
+        )
+        if not pacientes:
+            return []
+        por_id = {p.id: p for p in pacientes}
+        rows = (
+            db.query(Consulta)
+            .filter(Consulta.patientId.in_(list(por_id.keys())))
+            .order_by(Consulta.date.desc(), Consulta.time.desc())
+            .limit(limit)
+            .all()
+        )
+        result = []
+        for a in rows:
+            r = _row(a)
+            pac = por_id.get(a.patientId)
+            r["patientName"] = pac.name if pac else ""
+            r["patientPhone"] = pac.phone if pac else ""
+            if a.profissionalId:
+                prof = db.get(Profissional, a.profissionalId)
+                r["profissionalNome"] = prof.nome if prof else ""
+                r["profissionalCor"] = prof.cor if prof else "#0ea5e9"
+            else:
+                r["profissionalNome"] = ""
+                r["profissionalCor"] = "#64748b"
+            result.append(r)
+        return result
 
 
 @app.get("/api/appointments")
@@ -238,6 +321,15 @@ def list_appointments(date: str | None = None):
 def create_appointment(data: ConsultaIn):
     aid = data.id or _new_id()
     with SessionLocal() as db:
+        conflito = _consulta_conflitante(db, data)
+        if conflito:
+            pac = db.get(Paciente, conflito.patientId)
+            nome = pac.name if pac else "outro paciente"
+            raise HTTPException(
+                409,
+                f"Conflito de horário: {nome} já está agendado às {conflito.time} "
+                f"({conflito.duracaoMinutos or 60} min) com este profissional.",
+            )
         a = Consulta(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=aid)
         db.add(a)
         db.commit()
@@ -251,6 +343,15 @@ def update_appointment(aid: str, data: ConsultaIn):
         a = db.get(Consulta, aid)
         if not a:
             raise HTTPException(404)
+        conflito = _consulta_conflitante(db, data, exclude_id=aid)
+        if conflito:
+            pac = db.get(Paciente, conflito.patientId)
+            nome = pac.name if pac else "outro paciente"
+            raise HTTPException(
+                409,
+                f"Conflito de horário: {nome} já está agendado às {conflito.time} "
+                f"({conflito.duracaoMinutos or 60} min) com este profissional.",
+            )
         for k, v in data.model_dump(exclude={"id"}).items():
             setattr(a, k, v)
         db.commit()
