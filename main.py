@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, Lancamento, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
+from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
 
 app = FastAPI(title="CRM Moura — Backend v2.1")
 
@@ -738,6 +738,65 @@ def checar_consultas_proximas():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PRONTUÁRIO  (evoluções clínicas IMUTÁVEIS: apenas criação e leitura)
+# ══════════════════════════════════════════════════════════════════════════════
+class EvolucaoIn(BaseModel):
+    patientId: str
+    profissionalId: int
+    denteRegiao: str = ""
+    procedimento: str = ""
+    conteudo: str
+
+
+@app.get("/api/evolucoes")
+def list_evolucoes(patient_id: str):
+    with SessionLocal() as db:
+        rows = (
+            db.query(Evolucao)
+            .filter(Evolucao.patientId == patient_id)
+            .order_by(Evolucao.created_at.desc())
+            .all()
+        )
+        result = []
+        for e in rows:
+            r = _row(e)
+            r["created_at"] = e.created_at.isoformat() if e.created_at else None
+            prof = db.get(Profissional, e.profissionalId)
+            r["profissionalNome"] = prof.nome if prof else "—"
+            r["profissionalCor"] = prof.cor if prof else "#64748b"
+            result.append(r)
+        return result
+
+
+@app.post("/api/evolucoes", status_code=201)
+def create_evolucao(data: EvolucaoIn):
+    if not data.conteudo.strip():
+        raise HTTPException(422, "A evolução precisa de conteúdo.")
+    with SessionLocal() as db:
+        if not db.get(Profissional, data.profissionalId):
+            raise HTTPException(422, "Informe o profissional responsável pela evolução.")
+        e = Evolucao(
+            id=_new_id(),
+            patientId=data.patientId,
+            profissionalId=data.profissionalId,
+            denteRegiao=data.denteRegiao.strip(),
+            procedimento=data.procedimento.strip(),
+            conteudo=data.conteudo.strip(),
+        )
+        db.add(e)
+        db.commit()
+        db.refresh(e)
+        r = _row(e)
+        r["created_at"] = e.created_at.isoformat()
+        prof = db.get(Profissional, e.profissionalId)
+        r["profissionalNome"] = prof.nome if prof else "—"
+        return r
+
+# NOTA: intencionalmente NÃO existem PUT nem DELETE para evoluções.
+# Prontuário é registro legal imutável (CFO). Correções = nova evolução de retificação.
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FINANCEIRO  (lançamentos: cobranças e parcelas; valor em CENTAVOS)
 # ══════════════════════════════════════════════════════════════════════════════
 class LancamentoIn(BaseModel):
@@ -892,6 +951,7 @@ def dump():
             "profissionais": [_row(p) for p in db.query(Profissional).all()],
             "tarefas": [_row(t) for t in db.query(Tarefa).all()],
             "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
+            "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
             "settings": {c.key: c.value for c in db.query(Config).all()},
         }
 
