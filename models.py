@@ -1,4 +1,4 @@
-"""Modelos do banco do CRM — versão 2.0"""
+"""Modelos do banco do CRM — versão 2.2 (+ módulo financeiro)"""
 from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -112,3 +112,23 @@ class NotificacaoEnviada(Base):
     appointmentId: Mapped[str] = mapped_column(String(20))
     tipo: Mapped[str] = mapped_column(String(30))  # ex: "lembrete_60min", "lembrete_dia"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Lancamento(Base):
+    """Módulo financeiro: cada linha é uma cobrança (à vista ou uma parcela).
+    IMPORTANTE: valor é armazenado em CENTAVOS (inteiro) para evitar erros de
+    arredondamento de ponto flutuante. R$ 150,00 => 15000."""
+    __tablename__ = "lancamentos"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
+    appointmentId: Mapped[str | None] = mapped_column(String(20), nullable=True)  # consulta de origem, se houver
+    descricao: Mapped[str] = mapped_column(String(200), default="")
+    valor: Mapped[int] = mapped_column(Integer, default=0)  # CENTAVOS
+    vencimento: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    pagoEm: Mapped[str | None] = mapped_column(String(10), nullable=True)  # null = em aberto
+    formaPagamento: Mapped[str] = mapped_column(String(30), default="")  # dinheiro | pix | cartao_credito | cartao_debito | boleto | outro
+    numOrcamento: Mapped[str] = mapped_column(String(30), default="")
+    observacoes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
