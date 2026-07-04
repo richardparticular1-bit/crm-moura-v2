@@ -8,21 +8,23 @@ from __future__ import annotations
 import json
 import os
 import random
+import secrets
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import bcrypt
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
+from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.1")
 
@@ -78,6 +80,179 @@ def icon192():
 @app.get("/icon-512.png")
 def icon512():
     return FileResponse(FRONTEND / "icon-512.png", media_type="image/png")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AUTENTICAÇÃO  (bcrypt + sessões com token opaco; TODA a API exige login)
+# ══════════════════════════════════════════════════════════════════════════════
+SESSAO_DIAS = 30
+AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status")
+
+
+def _hash_senha(senha: str) -> str:
+    return bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
+
+
+def _verifica_senha(senha: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(senha.encode(), h.encode())
+    except ValueError:
+        return False
+
+
+def _usuario_do_token(db, token: str) -> Usuario | None:
+    if not token:
+        return None
+    s = db.get(Sessao, token)
+    if not s or s.expiresAt < datetime.now():
+        return None
+    u = db.get(Usuario, s.usuarioId)
+    return u if (u and u.ativo) else None
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if request.method != "OPTIONS" and path.startswith("/api") and not any(path.startswith(w) for w in AUTH_LIVRE):
+        auth = request.headers.get("authorization", "")
+        token = auth[7:] if auth.lower().startswith("bearer ") else ""
+        with SessionLocal() as db:
+            if _usuario_do_token(db, token) is None:
+                return JSONResponse({"detail": "Não autenticado. Faça login."}, status_code=401)
+    return await call_next(request)
+
+
+class SetupIn(BaseModel):
+    nome: str
+    email: str
+    senha: str
+
+
+class LoginIn(BaseModel):
+    email: str
+    senha: str
+
+
+def _criar_sessao(db, usuario: Usuario) -> str:
+    # higiene: remove sessões expiradas do usuário
+    db.query(Sessao).filter(Sessao.usuarioId == usuario.id, Sessao.expiresAt < datetime.now()).delete()
+    token = secrets.token_urlsafe(32)
+    db.add(Sessao(token=token, usuarioId=usuario.id, expiresAt=datetime.now() + timedelta(days=SESSAO_DIAS)))
+    db.commit()
+    return token
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    """Diz ao frontend se o sistema ainda precisa do primeiro usuário (setup)."""
+    with SessionLocal() as db:
+        return {"setup": db.query(Usuario).count() == 0}
+
+
+@app.post("/api/auth/setup", status_code=201)
+def auth_setup(data: SetupIn):
+    """Cria o PRIMEIRO usuário. Só funciona enquanto não existe nenhum."""
+    if len(data.senha) < 8:
+        raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
+    with SessionLocal() as db:
+        if db.query(Usuario).count() > 0:
+            raise HTTPException(403, "O sistema já foi configurado. Faça login.")
+        u = Usuario(nome=data.nome.strip(), email=data.email.strip().lower(), senhaHash=_hash_senha(data.senha), ativo=True)
+        db.add(u)
+        db.commit()
+        db.refresh(u)
+        token = _criar_sessao(db, u)
+        return {"token": token, "nome": u.nome}
+
+
+@app.post("/api/auth/login")
+def auth_login(data: LoginIn):
+    with SessionLocal() as db:
+        u = db.query(Usuario).filter(Usuario.email == data.email.strip().lower()).first()
+        if not u or not _verifica_senha(data.senha, u.senhaHash):
+            raise HTTPException(401, "E-mail ou senha incorretos.")
+        if not u.ativo:
+            raise HTTPException(403, "Usuário desativado. Fale com o administrador.")
+        token = _criar_sessao(db, u)
+        return {"token": token, "nome": u.nome}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request):
+    auth = request.headers.get("authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else ""
+    with SessionLocal() as db:
+        if token:
+            db.query(Sessao).filter(Sessao.token == token).delete()
+            db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    auth = request.headers.get("authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else ""
+    with SessionLocal() as db:
+        u = _usuario_do_token(db, token)
+        if not u:
+            raise HTTPException(401, "Não autenticado.")
+        return {"id": u.id, "nome": u.nome, "email": u.email}
+
+
+# ── gestão de usuários (qualquer usuário logado; equipe pequena) ───────────────
+class UsuarioIn(BaseModel):
+    nome: str
+    email: str
+    senha: str | None = None  # obrigatória ao criar; opcional ao editar (troca)
+    ativo: bool = True
+
+
+@app.get("/api/usuarios")
+def list_usuarios():
+    with SessionLocal() as db:
+        return [
+            {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
+            for u in db.query(Usuario).order_by(Usuario.nome).all()
+        ]
+
+
+@app.post("/api/usuarios", status_code=201)
+def create_usuario(data: UsuarioIn):
+    if not data.senha or len(data.senha) < 8:
+        raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
+    with SessionLocal() as db:
+        if db.query(Usuario).filter(Usuario.email == data.email.strip().lower()).first():
+            raise HTTPException(409, "Já existe um usuário com este e-mail.")
+        u = Usuario(nome=data.nome.strip(), email=data.email.strip().lower(), senhaHash=_hash_senha(data.senha), ativo=data.ativo)
+        db.add(u)
+        db.commit()
+        return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
+
+
+@app.put("/api/usuarios/{uid}")
+def update_usuario(uid: int, data: UsuarioIn):
+    with SessionLocal() as db:
+        u = db.get(Usuario, uid)
+        if not u:
+            raise HTTPException(404, "Usuário não encontrado")
+        if not data.ativo and u.ativo:
+            ativos = db.query(Usuario).filter(Usuario.ativo == True).count()  # noqa: E712
+            if ativos <= 1:
+                raise HTTPException(409, "Não é possível desativar o último usuário ativo.")
+        novo_email = data.email.strip().lower()
+        existente = db.query(Usuario).filter(Usuario.email == novo_email, Usuario.id != uid).first()
+        if existente:
+            raise HTTPException(409, "Já existe um usuário com este e-mail.")
+        u.nome = data.nome.strip()
+        u.email = novo_email
+        u.ativo = data.ativo
+        if data.senha:
+            if len(data.senha) < 8:
+                raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
+            u.senhaHash = _hash_senha(data.senha)
+            db.query(Sessao).filter(Sessao.usuarioId == uid).delete()  # troca de senha derruba sessões
+        db.commit()
+        return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
