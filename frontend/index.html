@@ -184,10 +184,11 @@ const IC = {
   prof:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   cake:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"/><line x1="2" y1="21" x2="22" y2="21"/><path d="M7 8v2"/><path d="M12 8v2"/><path d="M17 8v2"/><path d="M7 4h.01"/><path d="M12 4h.01"/><path d="M17 4h.01"/></svg>',
   money:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+  doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
 };
 
 /* ── estado global ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[] };
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
@@ -197,6 +198,7 @@ let FIN_SEARCH = "";
 let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
 let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
+let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
@@ -229,7 +231,7 @@ async function api(method, path, body) {
 }
 
 async function reloadAll() {
-  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
@@ -238,8 +240,9 @@ async function reloadAll() {
     api("GET", "/tarefas"),
     api("GET", "/aniversariantes"),
     api("GET", "/financeiro"),
+    api("GET", "/orcamentos"),
   ]);
-  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, chat: DB.chat||[] };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, chat: DB.chat||[] };
   render();
 }
 
@@ -278,6 +281,9 @@ function parseMoney(s){ // "1.250,50" | "1250,50" | "1250.50" | "1250" -> centav
   return isNaN(v) ? 0 : Math.round(v*100);
 }
 const FORMAS_PGTO = { dinheiro:"Dinheiro", pix:"Pix", cartao_credito:"Cartão de crédito", cartao_debito:"Cartão de débito", boleto:"Boleto", outro:"Outro" };
+const STATUS_ORC = { rascunho:"Rascunho", apresentado:"Apresentado", aprovado:"Aprovado", recusado:"Recusado" };
+const PILL_ORC = { rascunho:"p-cancelado", apresentado:"p-agendado", aprovado:"p-concluido", recusado:"p-faltou" };
+const pillOrc = s => `<span class="pill ${PILL_ORC[s]||"p-cancelado"}">${STATUS_ORC[s]||s}</span>`;
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),3500); }
 
 /* ── cálculos ── */
@@ -295,8 +301,9 @@ function calc(){
   const tarefasPendentes = DB.tarefas.filter(t=>t.status!=="concluida").length;
   const aniversarios = DB.aniversariantes.length;
   const finVencidos = (DB.lancamentos||[]).filter(l=>!l.pagoEm && l.vencimento < t).length;
+  const orcApresentados = (DB.orcamentos||[]).filter(o=>o.status==="apresentado").length;
   return { t, pendingConfirm, inactive, pendingSurvey, pendingReview, nps,
-    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos } };
+    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos, orcamentos:orcApresentados } };
 }
 
 /* ── navegação ── */
@@ -305,6 +312,7 @@ const NAV = [
   {id:"patients",label:"Pacientes",ic:IC.users},
   {id:"agenda",label:"Agenda",ic:IC.cal},
   {id:"financeiro",label:"Financeiro",ic:IC.money,badge:"financeiro"},
+  {id:"orcamentos",label:"Orçamentos",ic:IC.doc,badge:"orcamentos"},
   {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
   {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
   {id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
@@ -333,7 +341,7 @@ function render(){
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
-  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
+  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -856,6 +864,167 @@ async function delLanc(id){
 }
 
 /* ════════════════════════════════════════════
+   ORÇAMENTOS
+════════════════════════════════════════════ */
+function vOrcamentos(){
+  const O = DB.orcamentos || [];
+  const aprovados = O.filter(o=>o.status==="aprovado").length;
+  const recusados = O.filter(o=>o.status==="recusado").length;
+  const apresentados = O.filter(o=>o.status==="apresentado").length;
+  const decididos = aprovados + recusados;
+  const taxa = decididos ? Math.round(aprovados/decididos*100) : null;
+  const filtros = [["todos","Todos"],["rascunho","Rascunhos"],["apresentado","Apresentados"],["aprovado","Aprovados"],["recusado","Recusados"]].map(([k,lab])=>
+    `<button class="btn ${ORC_FILTRO===k?"":"ghost"} sm" onclick="ORC_FILTRO='${k}';render()">${lab}</button>`).join("");
+  let list = ORC_FILTRO==="todos" ? O : O.filter(o=>o.status===ORC_FILTRO);
+  list = list.slice().sort((a,b)=>b.data.localeCompare(a.data));
+  const rowHTML = o=>{
+    let acoes = "";
+    if(o.status==="rascunho") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${o.id}','apresentado')">Apresentar →</button>`;
+    else if(o.status==="apresentado") acoes = `<button class="btn sm" style="background:var(--green)" onclick="setOrcStatus('${o.id}','aprovado')">Aprovar ✓</button>
+      <button class="btn ghost sm" style="color:var(--rose)" onclick="setOrcStatus('${o.id}','recusado')">Recusar</button>`;
+    else if(o.status==="aprovado") acoes = o.cobrancasGeradas
+      ? `<button class="btn ghost sm" onclick="go('financeiro')">💰 No financeiro ✓</button>`
+      : `<button class="btn sm" style="background:var(--green)" onclick="openGerarCobrancas('${o.id}')">💰 Gerar cobranças</button>`;
+    else if(o.status==="recusado") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${o.id}','apresentado')">Reapresentar</button>`;
+    return `<div class="row">
+      <div style="text-align:center;min-width:78px">
+        <b style="display:block;font-size:13px;color:var(--teal-800)">${fmtMoney(o.total)}</b>
+        <span class="meta">${fmtDate(o.data)}</span>
+      </div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(o.patientName)}</div>
+        <div class="meta">${o.numItens} ite${o.numItens===1?"m":"ns"}${o.profissionalNome?` · ${esc(o.profissionalNome)}`:""}${o.observacoes?` · ${esc(o.observacoes)}`:""}</div>
+      </div>
+      ${pillOrc(o.status)}
+      ${acoes}
+      <button class="icon-btn" onclick="openOrcForm('${o.id}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delOrc('${o.id}')" aria-label="Excluir">${IC.trash}</button>
+    </div>`;
+  };
+  return `${header("Orçamentos","Planos de tratamento: rascunho → apresentado → aprovado.",`<button class="btn" onclick="openOrcForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo orçamento</button>`)}
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat ${apresentados?"warn":""}"><b>${apresentados}</b><span>Aguardando decisão</span></div>
+    <div class="stat good"><b>${aprovados}</b><span>Aprovados</span></div>
+    <div class="stat ${taxa!==null&&taxa>=50?"good":""}"><b>${taxa===null?"—":taxa+"%"}</b><span>Taxa de aprovação</span></div>
+  </div>
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">${filtros}</div>
+  ${list.length===0?empty(O.length===0?"Nenhum orçamento ainda. Crie o primeiro!":"Nenhum orçamento neste filtro."):
+  `<div class="card" style="padding:4px 16px">`+list.map(rowHTML).join("")+`</div>`}`;
+}
+
+function _orcItemRow(it){
+  it = it || {procedimento:"", denteRegiao:"", quantidade:1, valor:0};
+  return `<div class="orc-item" style="display:grid;grid-template-columns:2fr 1fr 56px 1fr 32px;gap:6px;margin-bottom:6px;align-items:center">
+    <input class="oi-proc" value="${esc(it.procedimento)}" placeholder="Procedimento" style="font-size:13px;padding:7px 9px">
+    <input class="oi-dente" value="${esc(it.denteRegiao)}" placeholder="Dente/região" style="font-size:13px;padding:7px 9px">
+    <input class="oi-qtd" type="number" min="1" value="${it.quantidade||1}" oninput="updateOrcTotal()" style="font-size:13px;padding:7px 6px;text-align:center">
+    <input class="oi-valor" inputmode="decimal" value="${it.valor?(it.valor/100).toFixed(2).replace(".",","):""}" placeholder="R$ unit." oninput="updateOrcTotal()" style="font-size:13px;padding:7px 9px">
+    <button class="icon-btn del" onclick="this.closest('.orc-item').remove();updateOrcTotal()" title="Remover">${IC.x}</button>
+  </div>`;
+}
+function addOrcItem(it){
+  document.getElementById("orc-itens").insertAdjacentHTML("beforeend", _orcItemRow(it));
+  updateOrcTotal();
+}
+function updateOrcTotal(){
+  let total = 0;
+  document.querySelectorAll("#orc-itens .orc-item").forEach(r=>{
+    const qtd = parseInt(r.querySelector(".oi-qtd").value)||1;
+    total += parseMoney(r.querySelector(".oi-valor").value) * qtd;
+  });
+  const el = document.getElementById("orc-total");
+  if(el) el.textContent = fmtMoney(total);
+}
+async function openOrcForm(id, presetPatientId){
+  let o = null;
+  if(id){
+    o = await api("GET", `/orcamentos/${id}`); // busca com itens
+  }
+  const ps = DB.patients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const profs = DB.profissionais.filter(p=>p.ativo || (o && p.id===o.profissionalId));
+  const selPat = o ? o.patientId : (presetPatientId || "");
+  modal(o?"Editar orçamento":"Novo orçamento",`
+    <div class="grid g2">
+      <label class="f"><span>Paciente *</span><select id="o-pat">${ps.map(p=>`<option value="${p.id}" ${selPat===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
+      <label class="f"><span>Dentista</span><select id="o-prof"><option value="">— Nenhum —</option>${profs.map(p=>`<option value="${p.id}" ${o&&o.profissionalId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Data</span><input type="date" id="o-data" value="${o?o.data:todayISO()}"></label>
+      <label class="f"><span>Observações</span><input id="o-obs" value="${o?esc(o.observacoes||""):""}" placeholder="Opcional"></label>
+    </div>
+    <label class="f"><span>Itens do plano *</span></label>
+    <div style="display:grid;grid-template-columns:2fr 1fr 56px 1fr 32px;gap:6px;margin-bottom:4px" class="meta">
+      <span>Procedimento</span><span>Dente/região</span><span style="text-align:center">Qtd</span><span>Valor unit.</span><span></span>
+    </div>
+    <div id="orc-itens"></div>
+    <button class="btn ghost sm" onclick="addOrcItem()" style="margin:4px 0 12px">${IC.plus} Adicionar item</button>
+    <div style="display:flex;justify-content:flex-end;font-size:15px;margin-bottom:12px">Total: <b id="orc-total" style="margin-left:8px;color:var(--teal-800)">R$ 0,00</b></div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveOrc('${id||""}')">${o?"Salvar":"Criar orçamento"}</button></div>`);
+  const itens = o && o.itens && o.itens.length ? o.itens : [null];
+  itens.forEach(it=>addOrcItem(it));
+}
+async function saveOrc(id){
+  const g=i=>document.getElementById(i)?.value;
+  const itens = [];
+  document.querySelectorAll("#orc-itens .orc-item").forEach(r=>{
+    const proc = r.querySelector(".oi-proc").value.trim();
+    const valor = parseMoney(r.querySelector(".oi-valor").value);
+    if(!proc && !valor) return; // linha vazia, ignora
+    itens.push({
+      procedimento: proc,
+      denteRegiao: r.querySelector(".oi-dente").value.trim(),
+      quantidade: parseInt(r.querySelector(".oi-qtd").value)||1,
+      valor,
+    });
+  });
+  if(itens.length===0){ toast("Adicione pelo menos um item."); return; }
+  if(itens.some(i=>!i.procedimento)){ toast("Todo item precisa de procedimento."); return; }
+  if(itens.some(i=>i.valor<=0)){ toast("Todo item precisa de valor."); return; }
+  const payload = {
+    patientId:g("o-pat"), profissionalId:g("o-prof")?parseInt(g("o-prof")):null,
+    data:g("o-data"), observacoes:g("o-obs")||"", itens,
+  };
+  if(id){ await api("PUT",`/orcamentos/${id}`,payload); }
+  else { await api("POST","/orcamentos",payload); }
+  closeModal();
+  if(TAB!=="orcamentos" && TAB!=="ficha") go("orcamentos"); else await reloadAll();
+  if(TAB==="ficha") render();
+  toast(id?"Orçamento atualizado.":"Orçamento criado (rascunho).");
+}
+async function setOrcStatus(id, status){
+  const labels = {apresentado:"apresentado ao paciente", aprovado:"APROVADO", recusado:"recusado"};
+  if(status!=="apresentado" && !confirm(`Marcar este orçamento como ${labels[status]}?`)) return;
+  await api("PUT",`/orcamentos/${id}/status`,{status});
+  await reloadAll();
+  toast(status==="aprovado" ? "Orçamento aprovado! 🎉 Gere as cobranças quando quiser." : "Status atualizado.");
+}
+function openGerarCobrancas(id){
+  const o = DB.orcamentos.find(x=>x.id===id); if(!o) return;
+  modal("Gerar cobranças no financeiro",`
+    <p style="font-size:14px;margin-bottom:14px"><b>${esc(o.patientName)}</b> · ${o.numItens} ite${o.numItens===1?"m":"ns"} · Total <b style="color:var(--teal-800)">${fmtMoney(o.total)}</b></p>
+    <div class="grid g2">
+      <label class="f"><span>Parcelas</span><select id="gc-parc">${Array.from({length:12},(_,i)=>`<option value="${i+1}">${i+1}x${i>0?" de ~"+fmtMoney(Math.floor(o.total/(i+1))):""}</option>`).join("")}</select></label>
+      <label class="f"><span>1º vencimento</span><input type="date" id="gc-venc" value="${todayISO()}"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" style="background:var(--green)" onclick="gerarCobrancas('${id}')">Gerar no financeiro</button></div>`);
+}
+async function gerarCobrancas(id){
+  const g=i=>document.getElementById(i).value;
+  const r = await api("POST",`/orcamentos/${id}/gerar-cobrancas`,{parcelas:parseInt(g("gc-parc"))||1, vencimento:g("gc-venc")});
+  closeModal(); await reloadAll();
+  toast(`${r.criados} cobrança${r.criados>1?"s criadas":" criada"} no financeiro. 💰`);
+}
+async function delOrc(id){
+  const o = DB.orcamentos.find(x=>x.id===id);
+  if(o && o.cobrancasGeradas && !confirm("Este orçamento já gerou cobranças no financeiro (elas NÃO serão excluídas). Excluir mesmo assim?")) return;
+  if(o && !o.cobrancasGeradas && !confirm("Excluir este orçamento e seus itens?")) return;
+  await api("DELETE",`/orcamentos/${id}`);
+  await reloadAll(); toast("Orçamento excluído.");
+}
+
+/* ════════════════════════════════════════════
    FICHA DO PACIENTE (prontuário digital)
 ════════════════════════════════════════════ */
 async function openFicha(pid){
@@ -926,6 +1095,22 @@ function vFicha(){
             <div style="font-size:14px;white-space:pre-wrap">${esc(e.conteudo)}</div>
           </div>
         </div>`).join("")}
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <h2>Orçamentos ${(()=>{const os=(DB.orcamentos||[]).filter(x=>x.patientId===p.id);return os.length?`(${os.length})`:"";})()}</h2>
+    ${(()=>{
+      const os = (DB.orcamentos||[]).filter(x=>x.patientId===p.id).sort((a,b)=>b.data.localeCompare(a.data));
+      if(os.length===0) return `<div style="color:var(--soft);font-size:14px">Nenhum orçamento.</div>`;
+      return os.map(o=>`
+        <div class="row">
+          <div style="min-width:78px"><b style="font-size:13px;color:var(--teal-800)">${fmtMoney(o.total)}</b><span class="meta" style="display:block">${fmtDate(o.data)}</span></div>
+          <div class="grow"><div style="font-size:13px">${o.numItens} ite${o.numItens===1?"m":"ns"}${o.observacoes?` · ${esc(o.observacoes)}`:""}</div></div>
+          ${pillOrc(o.status)}
+          <button class="icon-btn" onclick="openOrcForm('${o.id}')">${IC.pencil}</button>
+        </div>`).join("");
+    })()}
+    <button class="btn ghost sm" style="margin-top:8px" onclick="openOrcForm(null,'${p.id}')">${IC.plus} Novo orçamento</button>
   </div>
 
   <div class="grid g2" style="gap:12px;align-items:start">
