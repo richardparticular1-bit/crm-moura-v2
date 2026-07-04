@@ -170,3 +170,24 @@ class OrcamentoItem(Base):
     denteRegiao: Mapped[str] = mapped_column(String(60), default="")
     quantidade: Mapped[int] = mapped_column(Integer, default=1)
     valor: Mapped[int] = mapped_column(Integer, default=0)  # CENTAVOS, unitário
+
+
+class Usuario(Base):
+    """Usuário do sistema. Senha SEMPRE armazenada como hash bcrypt."""
+    __tablename__ = "usuarios"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nome: Mapped[str] = mapped_column(String(150))
+    email: Mapped[str] = mapped_column(String(120), unique=True)
+    senhaHash: Mapped[str] = mapped_column(String(100))
+    profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Sessao(Base):
+    """Sessão de login: token opaco com validade. Logout = excluir a linha."""
+    __tablename__ = "sessoes"
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    usuarioId: Mapped[int] = mapped_column(Integer, ForeignKey("usuarios.id"))
+    expiresAt: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
