@@ -206,9 +206,14 @@ let CHAT_POLL = null;
 let PUSH_SUPPORTED = ("serviceWorker" in navigator && "PushManager" in window);
 let PUSH_SUBSCRIBED = false;
 
+/* ── autenticação (cliente) ── */
+let AUTH_TOKEN = localStorage.getItem("crm_token") || "";
+let AUTH_NOME = localStorage.getItem("crm_nome") || "";
+
 /* ── API helpers ── */
 async function api(method, path, body) {
   const opts = { method, headers:{"Content-Type":"application/json"} };
+  if (AUTH_TOKEN) opts.headers["Authorization"] = "Bearer " + AUTH_TOKEN;
   if (body) opts.body = JSON.stringify(body);
   let r;
   try {
@@ -216,6 +221,12 @@ async function api(method, path, body) {
   } catch(e) {
     toast("Erro de conexão com o servidor.");
     throw e;
+  }
+  if (r.status === 401 && !path.startsWith("/auth/")) {
+    AUTH_TOKEN = ""; AUTH_NOME = "";
+    localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
+    showLogin();
+    throw new Error("401");
   }
   if (!r.ok) {
     let msg = "Erro no servidor (" + r.status + ").";
@@ -1465,6 +1476,17 @@ function vSettings(){
   const s=DB.settings;
   const notifAtivas = s.notifAtivas !== "false";
   return header("Ajustes","Configurações gerais e modelos de mensagem.")+`
+  <div class="card" style="margin-bottom:12px"><h2>Conta e equipe 🔐</h2>
+    <div class="row" style="border:none;padding:0">
+      <div class="avatar">${initials(AUTH_NOME)}</div>
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(AUTH_NOME)||"Usuário"}</div>
+        <div class="meta">Sessão ativa neste dispositivo</div>
+      </div>
+      <button class="btn ghost sm" onclick="openUsuariosModal()">Gerenciar equipe</button>
+      <button class="btn danger-link sm" onclick="logout()">Sair</button>
+    </div>
+  </div>
   <div class="card" style="margin-bottom:12px"><h2>Geral</h2>
     <label class="f"><span>Link de avaliação no Google</span><input id="s-link" value="${esc(s.googleReviewLink||"")}"></label>
     <label class="f"><span>Meses sem visita para paciente inativo</span><input type="number" min="1" id="s-months" value="${s.inactivityMonths||6}" style="max-width:110px"></label>
@@ -1608,6 +1630,99 @@ async function testPush(){
 }
 
 /* ════════════════════════════════════════════
+   LOGIN / SETUP / EQUIPE
+════════════════════════════════════════════ */
+async function showLogin(){
+  document.getElementById("login-screen")?.remove();
+  let setup = false;
+  try { const s = await fetch(API + "/auth/status").then(r=>r.json()); setup = !!s.setup; } catch(e){}
+  const div = document.createElement("div");
+  div.id = "login-screen";
+  div.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--teal-900);display:flex;align-items:center;justify-content:center;padding:18px";
+  div.innerHTML = `
+    <div style="background:#fff;border-radius:18px;padding:28px;width:100%;max-width:380px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+        <svg width="34" height="34" viewBox="0 0 32 32"><path d="M16 4c-4 0-9 1.5-9 7 0 4 1.5 6 2.4 9.5.9 3.6 1.3 7.5 3.4 7.5 2 0 1.4-5 3.2-5s1.2 5 3.2 5c2.1 0 2.5-3.9 3.4-7.5C23.5 17 25 15 25 11c0-5.5-5-7-9-7z" fill="#0f766e"/></svg>
+        <div><b style="font-size:17px">CRM Moura</b><div class="meta">Odontologia e Associados</div></div>
+      </div>
+      ${setup ? `
+        <h2 style="font-size:15px;margin-bottom:4px">Primeiro acesso</h2>
+        <p class="meta" style="margin-bottom:14px">Crie o usuário administrador do sistema.</p>
+        <label class="f"><span>Seu nome</span><input id="lg-nome" autocomplete="name"></label>` : `
+        <h2 style="font-size:15px;margin-bottom:14px">Entrar</h2>`}
+      <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
+      <label class="f"><span>Senha ${setup?"(mínimo 8 caracteres)":""}</span><input id="lg-senha" type="password" autocomplete="${setup?"new-password":"current-password"}" onkeydown="if(event.key==='Enter')authSubmit(${setup})"></label>
+      <button class="btn" style="width:100%;justify-content:center;margin-top:6px" onclick="authSubmit(${setup})">${setup?"Criar e entrar":"Entrar"}</button>
+    </div>`;
+  document.body.appendChild(div);
+  setTimeout(()=>document.getElementById(setup?"lg-nome":"lg-email")?.focus(), 50);
+}
+async function authSubmit(setup){
+  const g=i=>document.getElementById(i)?.value;
+  const email=(g("lg-email")||"").trim(), senha=g("lg-senha")||"";
+  if(!email || !senha){ toast("Preencha e-mail e senha."); return; }
+  try{
+    const r = setup
+      ? await api("POST","/auth/setup",{nome:(g("lg-nome")||"").trim()||email.split("@")[0], email, senha})
+      : await api("POST","/auth/login",{email, senha});
+    AUTH_TOKEN = r.token; AUTH_NOME = r.nome;
+    localStorage.setItem("crm_token", AUTH_TOKEN);
+    localStorage.setItem("crm_nome", AUTH_NOME);
+    document.getElementById("login-screen")?.remove();
+    await reloadAll();
+    toast(`Bem-vindo, ${AUTH_NOME.split(" ")[0]}! 👋`);
+  }catch(e){ /* toast já exibido pelo api() */ }
+}
+async function logout(){
+  try{ await api("POST","/auth/logout"); }catch(e){}
+  AUTH_TOKEN=""; AUTH_NOME="";
+  localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
+  showLogin();
+}
+async function openUsuariosModal(){
+  const usuarios = await api("GET","/usuarios");
+  modal("Equipe e acesso",`
+    ${usuarios.map(u=>`
+      <div class="row">
+        <div class="avatar">${initials(u.nome)}</div>
+        <div class="grow">
+          <div style="font-weight:500;font-size:14px">${esc(u.nome)} ${!u.ativo?'<span class="pill p-cancelado">Inativo</span>':""}</div>
+          <div class="meta">${esc(u.email)}</div>
+        </div>
+        <button class="btn ghost sm" onclick="openUsuarioForm(${u.id},'${esc(u.nome)}','${esc(u.email)}',${u.ativo})">Editar</button>
+      </div>`).join("")}
+    <div class="acts" style="justify-content:space-between;margin-top:12px">
+      <button class="btn ghost" onclick="closeModal()">Fechar</button>
+      <button class="btn" onclick="openUsuarioForm()">${IC.plus} Novo usuário</button>
+    </div>`);
+}
+function openUsuarioForm(id, nome, email, ativo){
+  modal(id?"Editar usuário":"Novo usuário",`
+    <label class="f"><span>Nome *</span><input id="u-nome" value="${nome||""}"></label>
+    <label class="f"><span>E-mail *</span><input id="u-email" type="email" value="${email||""}"></label>
+    <label class="f"><span>${id?"Nova senha (deixe vazio para manter)":"Senha * (mínimo 8 caracteres)"}</span><input id="u-senha" type="password" autocomplete="new-password"></label>
+    ${id?`<label class="f"><span>Status</span><select id="u-ativo"><option value="true" ${ativo?"selected":""}>Ativo</option><option value="false" ${!ativo?"selected":""}>Inativo</option></select></label>`:""}
+    <div class="acts"><button class="btn ghost" onclick="openUsuariosModal()">Voltar</button>
+    <button class="btn" onclick="saveUsuario(${id||0})">Salvar</button></div>`);
+}
+async function saveUsuario(id){
+  const g=i=>document.getElementById(i)?.value;
+  const payload = {
+    nome:(g("u-nome")||"").trim(), email:(g("u-email")||"").trim(),
+    senha:g("u-senha")||null,
+    ativo: id ? g("u-ativo")==="true" : true,
+  };
+  if(!payload.nome || !payload.email){ toast("Preencha nome e e-mail."); return; }
+  if(id){ await api("PUT",`/usuarios/${id}`,payload); }
+  else {
+    if(!payload.senha){ toast("Defina uma senha para o novo usuário."); return; }
+    await api("POST","/usuarios",payload);
+  }
+  toast("Usuário salvo.");
+  openUsuariosModal();
+}
+
+/* ════════════════════════════════════════════
    COMPONENTES COMPARTILHADOS
 ════════════════════════════════════════════ */
 function header(title,sub,action){ return `<div class="hd"><div><h1>${title}</h1>${sub?`<p>${sub}</p>`:""}</div>${action||""}</div>`; }
@@ -1637,7 +1752,11 @@ if("serviceWorker" in navigator){
 }
 
 /* ── inicialização ── */
-reloadAll();
+(async function boot(){
+  if(!AUTH_TOKEN){ showLogin(); return; }
+  try { await reloadAll(); }
+  catch(e){ /* 401 já redireciona para o login dentro do api() */ }
+})();
 </script>
 </body>
 </html>
