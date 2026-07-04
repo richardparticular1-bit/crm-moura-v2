@@ -146,3 +146,27 @@ class Evolucao(Base):
     procedimento: Mapped[str] = mapped_column(String(120), default="")
     conteudo: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Orcamento(Base):
+    """Plano de tratamento orçado. Total = soma dos itens.
+    Fluxo de status: rascunho -> apresentado -> aprovado | recusado."""
+    __tablename__ = "orcamentos"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
+    data: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    status: Mapped[str] = mapped_column(String(20), default="rascunho")  # rascunho | apresentado | aprovado | recusado
+    observacoes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class OrcamentoItem(Base):
+    __tablename__ = "orcamento_itens"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    orcamentoId: Mapped[str] = mapped_column(String(20), ForeignKey("orcamentos.id"))
+    procedimento: Mapped[str] = mapped_column(String(150))
+    denteRegiao: Mapped[str] = mapped_column(String(60), default="")
+    quantidade: Mapped[int] = mapped_column(Integer, default=1)
+    valor: Mapped[int] = mapped_column(Integer, default=0)  # CENTAVOS, unitário
