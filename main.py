@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
+from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Tarefa
 
 app = FastAPI(title="CRM Moura — Backend v2.1")
 
@@ -797,6 +797,187 @@ def create_evolucao(data: EvolucaoIn):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ORÇAMENTOS  (plano de tratamento; itens em CENTAVOS; aprovado -> gera cobranças)
+# ══════════════════════════════════════════════════════════════════════════════
+class OrcItemIn(BaseModel):
+    procedimento: str
+    denteRegiao: str = ""
+    quantidade: int = 1
+    valor: int = 0  # centavos, unitário
+
+
+class OrcamentoIn(BaseModel):
+    patientId: str
+    profissionalId: int | None = None
+    data: str
+    observacoes: str = ""
+    itens: list[OrcItemIn] = []
+
+
+ORC_STATUS_VALIDOS = {"rascunho", "apresentado", "aprovado", "recusado"}
+
+
+def _orc_row(db, o: Orcamento, com_itens: bool = False) -> dict[str, Any]:
+    r = _row(o)
+    r.pop("created_at", None)
+    pac = db.get(Paciente, o.patientId)
+    r["patientName"] = pac.name if pac else "Paciente removido"
+    if o.profissionalId:
+        prof = db.get(Profissional, o.profissionalId)
+        r["profissionalNome"] = prof.nome if prof else ""
+    else:
+        r["profissionalNome"] = ""
+    itens = db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == o.id).order_by(OrcamentoItem.id).all()
+    r["total"] = sum(i.valor * i.quantidade for i in itens)
+    r["numItens"] = len(itens)
+    ja_gerou = db.query(Lancamento).filter(Lancamento.numOrcamento == o.id).first() is not None
+    r["cobrancasGeradas"] = ja_gerou
+    if com_itens:
+        r["itens"] = [_row(i) for i in itens]
+    return r
+
+
+@app.get("/api/orcamentos")
+def list_orcamentos():
+    with SessionLocal() as db:
+        rows = db.query(Orcamento).order_by(Orcamento.data.desc()).all()
+        return [_orc_row(db, o) for o in rows]
+
+
+@app.get("/api/orcamentos/{oid}")
+def get_orcamento(oid: str):
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o:
+            raise HTTPException(404, "Orçamento não encontrado")
+        return _orc_row(db, o, com_itens=True)
+
+
+@app.post("/api/orcamentos", status_code=201)
+def create_orcamento(data: OrcamentoIn):
+    if not data.itens:
+        raise HTTPException(422, "Adicione pelo menos um item ao orçamento.")
+    with SessionLocal() as db:
+        o = Orcamento(
+            id=_new_id(),
+            patientId=data.patientId,
+            profissionalId=data.profissionalId,
+            data=data.data,
+            status="rascunho",
+            observacoes=data.observacoes,
+        )
+        db.add(o)
+        for it in data.itens:
+            db.add(OrcamentoItem(
+                orcamentoId=o.id,
+                procedimento=it.procedimento.strip(),
+                denteRegiao=it.denteRegiao.strip(),
+                quantidade=max(1, it.quantidade),
+                valor=max(0, it.valor),
+            ))
+        db.commit()
+        return _orc_row(db, o, com_itens=True)
+
+
+@app.put("/api/orcamentos/{oid}")
+def update_orcamento(oid: str, data: OrcamentoIn):
+    if not data.itens:
+        raise HTTPException(422, "Adicione pelo menos um item ao orçamento.")
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o:
+            raise HTTPException(404, "Orçamento não encontrado")
+        o.patientId = data.patientId
+        o.profissionalId = data.profissionalId
+        o.data = data.data
+        o.observacoes = data.observacoes
+        db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).delete()
+        for it in data.itens:
+            db.add(OrcamentoItem(
+                orcamentoId=oid,
+                procedimento=it.procedimento.strip(),
+                denteRegiao=it.denteRegiao.strip(),
+                quantidade=max(1, it.quantidade),
+                valor=max(0, it.valor),
+            ))
+        db.commit()
+        return _orc_row(db, o, com_itens=True)
+
+
+class OrcStatusIn(BaseModel):
+    status: str
+
+
+@app.put("/api/orcamentos/{oid}/status")
+def set_orcamento_status(oid: str, data: OrcStatusIn):
+    if data.status not in ORC_STATUS_VALIDOS:
+        raise HTTPException(422, f"Status inválido. Use: {', '.join(sorted(ORC_STATUS_VALIDOS))}")
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o:
+            raise HTTPException(404, "Orçamento não encontrado")
+        o.status = data.status
+        db.commit()
+        return _orc_row(db, o)
+
+
+class GerarCobrancasIn(BaseModel):
+    parcelas: int = 1
+    vencimento: str  # 1º vencimento
+
+
+@app.post("/api/orcamentos/{oid}/gerar-cobrancas", status_code=201)
+def gerar_cobrancas(oid: str, data: GerarCobrancasIn):
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o:
+            raise HTTPException(404, "Orçamento não encontrado")
+        if o.status != "aprovado":
+            raise HTTPException(409, "Só é possível gerar cobranças de orçamentos aprovados.")
+        if db.query(Lancamento).filter(Lancamento.numOrcamento == oid).first():
+            raise HTTPException(409, "Este orçamento já tem cobranças geradas no financeiro.")
+        itens = db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).all()
+        total = sum(i.valor * i.quantidade for i in itens)
+        if total <= 0:
+            raise HTTPException(422, "O orçamento não tem valor.")
+        pac = db.get(Paciente, o.patientId)
+        desc_base = f"Orçamento {oid}" + (f" — {pac.name.split(' ')[0]}" if pac else "")
+        n = max(1, min(24, data.parcelas))
+        base = total // n
+        resto = total - base * n
+        criados = []
+        for i in range(n):
+            l = Lancamento(
+                id=_new_id(),
+                patientId=o.patientId,
+                profissionalId=o.profissionalId,
+                appointmentId=None,
+                descricao=desc_base + (f" ({i+1}/{n})" if n > 1 else ""),
+                valor=base + (resto if i == 0 else 0),
+                vencimento=_add_meses(data.vencimento, i),
+                pagoEm=None,
+                formaPagamento="",
+                numOrcamento=oid,
+                observacoes="",
+            )
+            db.add(l)
+            criados.append(l)
+        db.commit()
+        return {"ok": True, "criados": len(criados), "total": total}
+
+
+@app.delete("/api/orcamentos/{oid}", status_code=204)
+def delete_orcamento(oid: str):
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o:
+            raise HTTPException(404)
+        db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).delete()
+        db.delete(o)
+        db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FINANCEIRO  (lançamentos: cobranças e parcelas; valor em CENTAVOS)
 # ══════════════════════════════════════════════════════════════════════════════
 class LancamentoIn(BaseModel):
@@ -952,6 +1133,8 @@ def dump():
             "tarefas": [_row(t) for t in db.query(Tarefa).all()],
             "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
             "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
+            "orcamentos": [_row(o) for o in db.query(Orcamento).all()],
+            "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
             "settings": {c.key: c.value for c in db.query(Config).all()},
         }
 
