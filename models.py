@@ -191,3 +191,18 @@ class Sessao(Base):
     usuarioId: Mapped[int] = mapped_column(Integer, ForeignKey("usuarios.id"))
     expiresAt: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class Anexo(Base):
+    """Arquivo anexado ao prontuário do paciente (radiografia, documento,
+    consentimento assinado, foto). O binário vive no Supabase Storage
+    (bucket privado); aqui fica só o metadado + caminho."""
+    __tablename__ = "anexos"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    categoria: Mapped[str] = mapped_column(String(30), default="documento")  # radiografia | documento | consentimento | foto | outro
+    nome: Mapped[str] = mapped_column(String(200))          # nome original do arquivo
+    mimeType: Mapped[str] = mapped_column(String(100))
+    tamanho: Mapped[int] = mapped_column(Integer, default=0)  # bytes
+    storagePath: Mapped[str] = mapped_column(String(300))   # caminho no bucket
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
