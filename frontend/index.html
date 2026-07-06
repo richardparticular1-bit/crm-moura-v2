@@ -198,6 +198,7 @@ let FIN_SEARCH = "";
 let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
 let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
+let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
@@ -261,6 +262,28 @@ async function reloadChat() {
   DB.chat = await api("GET", `/chat?canal=${encodeURIComponent(CHAT_CANAL)}&limit=100`);
   renderChatMsgs();
 }
+
+async function apiUpload(path, formData) {
+  const opts = { method:"POST", body: formData, headers:{} };
+  if (AUTH_TOKEN) opts.headers["Authorization"] = "Bearer " + AUTH_TOKEN;
+  let r;
+  try { r = await fetch(API + path, opts); }
+  catch(e){ toast("Erro de conexão com o servidor."); throw e; }
+  if (r.status === 401) {
+    AUTH_TOKEN=""; AUTH_NOME="";
+    localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
+    showLogin(); throw new Error("401");
+  }
+  if (!r.ok) {
+    let msg = "Erro no servidor (" + r.status + ").";
+    try { const j = await r.json(); if (j && j.detail) msg = typeof j.detail==="string"? j.detail : msg; } catch(_){}
+    toast(msg); throw new Error(msg);
+  }
+  return r.json();
+}
+const fmtBytes = b => b>=1048576 ? (b/1048576).toFixed(1)+" MB" : b>=1024 ? Math.round(b/1024)+" KB" : b+" B";
+const CATEGORIAS_ANEXO = { radiografia:"Radiografia", documento:"Documento", consentimento:"Consentimento", foto:"Foto", outro:"Outro" };
+const ICONE_ANEXO = { radiografia:"🦷", documento:"📄", consentimento:"✍️", foto:"📷", outro:"📎" };
 
 /* ── utilidades ── */
 const PROCEDURES = ["Avaliação","Limpeza","Restauração","Canal","Extração","Clareamento","Ortodontia","Implante","Prótese","Outro"];
@@ -1041,10 +1064,15 @@ async function delOrc(id){
 async function openFicha(pid){
   FICHA_ID = pid;
   FICHA_EVOLUCOES = [];
+  FICHA_ANEXOS = [];
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
-  FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`);
-  if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com as evoluções carregadas
+  const [ev, ax] = await Promise.all([
+    api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`),
+    api("GET", `/anexos?patient_id=${encodeURIComponent(pid)}`),
+  ]);
+  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax;
+  if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   window.scrollTo(0,0);
 }
 function fmtDateTime(iso){
@@ -1124,6 +1152,30 @@ function vFicha(){
     <button class="btn ghost sm" style="margin-top:8px" onclick="openOrcForm(null,'${p.id}')">${IC.plus} Novo orçamento</button>
   </div>
 
+  <div class="card" style="margin-bottom:12px">
+    <h2>Anexos ${FICHA_ANEXOS.length?`(${FICHA_ANEXOS.length})`:""} — radiografias, documentos, consentimentos</h2>
+    ${FICHA_ANEXOS.length===0
+      ? `<div style="color:var(--soft);font-size:14px;padding:4px 0 10px">Nenhum arquivo anexado.</div>`
+      : FICHA_ANEXOS.map(a=>`
+        <div class="row">
+          <div style="font-size:22px;min-width:32px;text-align:center">${ICONE_ANEXO[a.categoria]||"📎"}</div>
+          <div class="grow">
+            <div style="font-weight:500;font-size:14px;word-break:break-all">${esc(a.nome)}</div>
+            <div class="meta">${CATEGORIAS_ANEXO[a.categoria]||a.categoria} · ${fmtBytes(a.tamanho)} · ${fmtDateTime(a.created_at)}</div>
+          </div>
+          <button class="btn ghost sm" onclick="verAnexo('${a.id}')">Abrir</button>
+          <button class="icon-btn del" onclick="delAnexo('${a.id}')" aria-label="Excluir">${IC.trash}</button>
+        </div>`).join("")}
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <select id="anexo-cat" style="width:auto;font-size:13px;padding:7px 10px">
+        ${Object.entries(CATEGORIAS_ANEXO).map(([k,v])=>`<option value="${k}">${ICONE_ANEXO[k]} ${v}</option>`).join("")}
+      </select>
+      <button class="btn ghost sm" onclick="document.getElementById('anexo-file').click()">${IC.upload} Anexar arquivo</button>
+      <input type="file" id="anexo-file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" style="display:none" onchange="uploadAnexo(this)">
+      <span class="meta">Imagens ou PDF, até 15 MB.</span>
+    </div>
+  </div>
+
   <div class="grid g2" style="gap:12px;align-items:start">
     <div class="card">
       <h2>Consultas (${consultas.length})</h2>
@@ -1168,6 +1220,35 @@ async function saveEvolucao(){
   });
   FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(FICHA_ID)}`);
   render(); toast("Evolução registrada. 📋");
+}
+async function uploadAnexo(input){
+  const f = input.files[0]; if(!f) return;
+  input.value = "";
+  if(f.size > 15*1024*1024){ toast("Arquivo maior que 15 MB."); return; }
+  const cat = document.getElementById("anexo-cat")?.value || "documento";
+  toast("Enviando arquivo…");
+  const fd = new FormData();
+  fd.append("patientId", FICHA_ID);
+  fd.append("categoria", cat);
+  fd.append("file", f);
+  const novo = await apiUpload("/anexos", fd);
+  FICHA_ANEXOS = [novo, ...FICHA_ANEXOS];
+  render();
+  toast("Arquivo anexado. 📎");
+}
+async function verAnexo(id){
+  const r = await api("GET", `/anexos/${id}/url`);
+  window.open(r.url, "_blank");
+}
+async function delAnexo(id){
+  const a = FICHA_ANEXOS.find(x=>x.id===id);
+  const aviso = a && a.categoria==="consentimento"
+    ? "ATENÇÃO: este é um TERMO DE CONSENTIMENTO — documento legal. Excluir mesmo assim?"
+    : "Excluir este anexo permanentemente?";
+  if(!confirm(aviso)) return;
+  await api("DELETE", `/anexos/${id}`);
+  FICHA_ANEXOS = FICHA_ANEXOS.filter(x=>x.id!==id);
+  render(); toast("Anexo excluído.");
 }
 async function migrarNotas(pid){
   const p = pById(pid); if(!p || !p.notes?.trim()) return;
