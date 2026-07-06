@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import bcrypt
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +25,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Sessao, Tarefa, Usuario
+from models import Anexo, Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.1")
 
@@ -913,6 +914,130 @@ def checar_consultas_proximas():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANEXOS DO PRONTUÁRIO  (binários no Supabase Storage; bucket privado "prontuarios")
+# ══════════════════════════════════════════════════════════════════════════════
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+ANEXO_BUCKET = "prontuarios"
+ANEXO_MAX_BYTES = 15 * 1024 * 1024  # 15 MB
+ANEXO_MIMES = {
+    "image/jpeg", "image/png", "image/webp", "image/gif",
+    "application/pdf",
+}
+ANEXO_CATEGORIAS = {"radiografia", "documento", "consentimento", "foto", "outro"}
+
+
+def _sb_headers(content_type: str | None = None) -> dict:
+    h = {"Authorization": f"Bearer {SUPABASE_SERVICE_KEY}", "apikey": SUPABASE_SERVICE_KEY}
+    if content_type:
+        h["Content-Type"] = content_type
+    return h
+
+
+def _sb_configurado():
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(503, "Storage não configurado: defina SUPABASE_URL e SUPABASE_SERVICE_KEY no Render.")
+
+
+def _sb_upload(path: str, conteudo: bytes, mime: str):
+    r = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/{ANEXO_BUCKET}/{path}",
+        headers=_sb_headers(mime), data=conteudo, timeout=60,
+    )
+    if r.status_code not in (200, 201):
+        raise HTTPException(502, f"Falha ao enviar ao storage ({r.status_code}). O bucket '{ANEXO_BUCKET}' existe no Supabase?")
+
+
+def _sb_signed_url(path: str, segundos: int = 300) -> str:
+    r = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/sign/{ANEXO_BUCKET}/{path}",
+        headers=_sb_headers("application/json"), json={"expiresIn": segundos}, timeout=30,
+    )
+    if r.status_code != 200:
+        raise HTTPException(502, "Falha ao gerar link do arquivo.")
+    return f"{SUPABASE_URL}/storage/v1{r.json()['signedURL']}"
+
+
+def _sb_delete(path: str):
+    requests.delete(
+        f"{SUPABASE_URL}/storage/v1/object/{ANEXO_BUCKET}/{path}",
+        headers=_sb_headers(), timeout=30,
+    )  # best-effort: se falhar, o metadado já terá sido removido do banco
+
+
+def _nome_seguro(nome: str) -> str:
+    import re
+    base = re.sub(r"[^\w.\-]", "_", nome or "arquivo")
+    return base[:120]
+
+
+@app.get("/api/anexos")
+def list_anexos(patient_id: str):
+    with SessionLocal() as db:
+        rows = (
+            db.query(Anexo)
+            .filter(Anexo.patientId == patient_id)
+            .order_by(Anexo.created_at.desc())
+            .all()
+        )
+        return [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in rows]
+
+
+@app.post("/api/anexos", status_code=201)
+async def upload_anexo(
+    patientId: str = Form(...),
+    categoria: str = Form("documento"),
+    file: UploadFile = File(...),
+):
+    _sb_configurado()
+    if categoria not in ANEXO_CATEGORIAS:
+        categoria = "outro"
+    mime = (file.content_type or "").lower()
+    if mime not in ANEXO_MIMES:
+        raise HTTPException(422, "Tipo de arquivo não permitido. Use imagens (JPG, PNG, WEBP, GIF) ou PDF.")
+    conteudo = await file.read()
+    if len(conteudo) == 0:
+        raise HTTPException(422, "Arquivo vazio.")
+    if len(conteudo) > ANEXO_MAX_BYTES:
+        raise HTTPException(422, "Arquivo maior que 15 MB.")
+    with SessionLocal() as db:
+        if not db.get(Paciente, patientId):
+            raise HTTPException(404, "Paciente não encontrado.")
+        aid = _new_id()
+        nome = _nome_seguro(file.filename or "arquivo")
+        path = f"{patientId}/{aid}_{nome}"
+        _sb_upload(path, conteudo, mime)
+        a = Anexo(id=aid, patientId=patientId, categoria=categoria, nome=file.filename or nome,
+                  mimeType=mime, tamanho=len(conteudo), storagePath=path)
+        db.add(a)
+        db.commit()
+        return {**_row(a), "created_at": a.created_at.isoformat()}
+
+
+@app.get("/api/anexos/{aid}/url")
+def anexo_url(aid: str):
+    _sb_configurado()
+    with SessionLocal() as db:
+        a = db.get(Anexo, aid)
+        if not a:
+            raise HTTPException(404, "Anexo não encontrado.")
+        return {"url": _sb_signed_url(a.storagePath), "nome": a.nome, "mimeType": a.mimeType}
+
+
+@app.delete("/api/anexos/{aid}", status_code=204)
+def delete_anexo(aid: str):
+    _sb_configurado()
+    with SessionLocal() as db:
+        a = db.get(Anexo, aid)
+        if not a:
+            raise HTTPException(404)
+        path = a.storagePath
+        db.delete(a)
+        db.commit()
+    _sb_delete(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PRONTUÁRIO  (evoluções clínicas IMUTÁVEIS: apenas criação e leitura)
 # ══════════════════════════════════════════════════════════════════════════════
 class EvolucaoIn(BaseModel):
@@ -1310,6 +1435,7 @@ def dump():
             "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
             "orcamentos": [_row(o) for o in db.query(Orcamento).all()],
             "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
+            "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in db.query(Anexo).all()],
             "settings": {c.key: c.value for c in db.query(Config).all()},
         }
 
