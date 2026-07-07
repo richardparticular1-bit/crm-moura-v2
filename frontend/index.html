@@ -185,10 +185,12 @@ const IC = {
   cake:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"/><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"/><line x1="2" y1="21" x2="22" y2="21"/><path d="M7 8v2"/><path d="M12 8v2"/><path d="M17 8v2"/><path d="M7 4h.01"/><path d="M12 4h.01"/><path d="M17 4h.01"/></svg>',
   money:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
   doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+  bell:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
+  chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
 };
 
 /* ── estado global ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[] };
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[], retornos:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
@@ -200,6 +202,8 @@ let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
+let REL_MES = todayISO().slice(0,7);  // mês do relatório por dentista
+let FICHA_RETORNO = null;     // meses de retorno custom do paciente da ficha (null = padrão)
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
 let CHAT_PROF_ID = null; // profissional logado no chat
@@ -243,7 +247,7 @@ async function api(method, path, body) {
 }
 
 async function reloadAll() {
-  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
@@ -253,8 +257,9 @@ async function reloadAll() {
     api("GET", "/aniversariantes"),
     api("GET", "/financeiro"),
     api("GET", "/orcamentos"),
+    api("GET", "/retornos"),
   ]);
-  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, chat: DB.chat||[] };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, chat: DB.chat||[] };
   render();
 }
 
@@ -336,8 +341,9 @@ function calc(){
   const aniversarios = DB.aniversariantes.length;
   const finVencidos = (DB.lancamentos||[]).filter(l=>!l.pagoEm && l.vencimento < t).length;
   const orcApresentados = (DB.orcamentos||[]).filter(o=>o.status==="apresentado").length;
+  const retornosDue = (DB.retornos||[]).length;
   return { t, pendingConfirm, inactive, pendingSurvey, pendingReview, nps,
-    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos, orcamentos:orcApresentados } };
+    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos, orcamentos:orcApresentados, retornos:retornosDue } };
 }
 
 /* ── navegação ── */
@@ -349,6 +355,8 @@ const NAV = [
   {id:"orcamentos",label:"Orçamentos",ic:IC.doc,badge:"orcamentos"},
   {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
   {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
+  {id:"retornos",label:"Retornos",ic:IC.bell,badge:"retornos"},
+  {id:"relatorios",label:"Relatórios",ic:IC.chart},
   {id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
   {id:"review",label:"Aval. Google",ic:IC.star,badge:"review"},
   {id:"tarefas",label:"Tarefas",ic:IC.task,badge:"tarefas"},
@@ -376,6 +384,7 @@ function render(){
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
   const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
+    retornos:vRetornos, relatorios:vRelatorios,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -803,7 +812,7 @@ function vFinanceiro(C){
       <button class="icon-btn del" onclick="delLanc('${l.id}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
   };
-  return `${header("Financeiro","Cobranças, parcelas e recebimentos.",`<button class="btn" onclick="openLancForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo lançamento</button>`)}
+  return `${header("Financeiro","Cobranças, parcelas e recebimentos.",`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="exportCsvFin()">${IC.upload} CSV</button><button class="btn" onclick="openLancForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo lançamento</button></div>`)}
   <div class="daynav">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_finShiftMes(-1)">${IC.left}</button>
     <span style="font-size:14px;font-weight:700;color:#334155">${mesLabel}</span>
@@ -821,6 +830,35 @@ function vFinanceiro(C){
   `<div class="card" style="padding:4px 16px">`+list.map(rowHTML).join("")+`</div>`}`;
 }
 function renderKeepFocusFin(el){ const pos=el.selectionStart; render(); const n=document.getElementById("fin-search"); if(n){n.focus();n.setSelectionRange(pos,pos);} }
+
+function exportCsvFin(){
+  const t = todayISO();
+  const q = FIN_SEARCH.trim().toLowerCase();
+  let list = (DB.lancamentos||[]).filter(l=>!q || (l.patientName||"").toLowerCase().includes(q) || (l.descricao||"").toLowerCase().includes(q));
+  if(FIN_FILTRO==="abertos") list = list.filter(l=>!l.pagoEm);
+  else if(FIN_FILTRO==="vencidos") list = list.filter(l=>!l.pagoEm && l.vencimento < t);
+  else if(FIN_FILTRO==="pagos") list = list.filter(l=>l.pagoEm);
+  if(list.length===0){ toast("Nada para exportar neste filtro."); return; }
+  const cel = v => `"${String(v??"").replace(/"/g,'""')}"`;
+  const linhas = [
+    ["Vencimento","Pago em","Paciente","Descrição","Dentista","Valor (R$)","Forma de pagamento","Status","Nº Orçamento","Observações"].join(";"),
+    ...list.map(l=>[
+      cel(fmtDate(l.vencimento)), cel(l.pagoEm?fmtDate(l.pagoEm):""),
+      cel(l.patientName), cel(l.descricao), cel(l.profissionalNome||""),
+      cel((l.valor/100).toFixed(2).replace(".",",")),
+      cel(l.pagoEm?(FORMAS_PGTO[l.formaPagamento]||l.formaPagamento):""),
+      cel(l.pagoEm?"Pago":(l.vencimento<t?"Vencido":"Em aberto")),
+      cel(l.numOrcamento||""), cel(l.observacoes||""),
+    ].join(";"))
+  ];
+  const blob = new Blob(["\ufeff"+linhas.join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `financeiro-${FIN_FILTRO}-${todayISO()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  toast(`${list.length} lançamentos exportados.`);
+}
 
 function openLancForm(id, apptId){
   const l = id ? DB.lancamentos.find(x=>x.id===id) : null;
@@ -1067,11 +1105,12 @@ async function openFicha(pid){
   FICHA_ANEXOS = [];
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
-  const [ev, ax] = await Promise.all([
+  const [ev, ax, ret] = await Promise.all([
     api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`),
     api("GET", `/anexos?patient_id=${encodeURIComponent(pid)}`),
+    api("GET", `/retorno/${encodeURIComponent(pid)}`),
   ]);
-  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax;
+  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses;
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   window.scrollTo(0,0);
 }
@@ -1096,6 +1135,15 @@ function vFicha(){
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
+  </div>
+
+  <div class="card" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px">
+    <span style="font-size:13px;font-weight:600">🔔 Retorno preventivo:</span>
+    <select onchange="setRetornoMeses('${p.id}',this.value)" style="width:auto;font-size:13px;padding:6px 9px">
+      <option value="" ${FICHA_RETORNO===null?"selected":""}>Padrão da clínica (${DB.settings.retornoMesesPadrao||6} meses)</option>
+      ${[3,4,6,12].map(m=>`<option value="${m}" ${FICHA_RETORNO===m?"selected":""}>${m} meses</option>`).join("")}
+    </select>
+    <span class="meta">Prazo para este paciente voltar após a última visita.</span>
   </div>
 
   <div class="card" style="margin-bottom:12px">
@@ -1293,6 +1341,85 @@ async function markConfirmed(id){
   const a=DB.appointments.find(x=>x.id===id);
   await api("PUT",`/appointments/${id}`,{...a,status:"confirmado"});
   await reloadAll(); toast("Consulta confirmada.");
+}
+
+/* ════════════════════════════════════════════
+   RETORNOS PREVENTIVOS (recall)
+════════════════════════════════════════════ */
+function vRetornos(){
+  const list = DB.retornos || [];
+  return header("Retornos preventivos","Pacientes no prazo de voltar (janela de 30 dias) e atrasados, sem consulta futura marcada.")+
+  (list.length===0?empty("Ninguém no prazo de retorno. 🎉"):
+  list.map(r=>{
+    const flag = r.sentAt ? "Convite enviado em "+fmtDate(r.sentAt) : null;
+    return queueCard(r.name,
+      `Última visita: ${fmtDate(r.lastVisit)} · retorno de ${r.meses} meses · ${r.atrasado?"venceu":"vence"} em ${fmtDate(r.due)}`,
+      flag,
+      (r.atrasado?`<span class="pill p-faltou">Atrasado</span>`:`<span class="pill p-agendado">Em breve</span>`)+
+      (r.phone?`<button class="btn whats sm" onclick="sendRetorno('${r.patientId}')">${IC.send} ${r.sentAt?"Reenviar":"Convidar retorno"}</button>`:"")+
+      `<button class="btn ghost sm" onclick="openFicha('${r.patientId}')">Ficha</button>`);
+  }).join(""));
+}
+async function sendRetorno(pid){
+  const r = (DB.retornos||[]).find(x=>x.patientId===pid); if(!r) return;
+  const msg = fill(DB.settings.msgRetorno||"Olá {nome}! Já faz um tempinho desde sua última visita ({ultimaVisita}). Que tal agendar seu retorno preventivo na Moura Odontologia? 🦷",
+    {nome:r.name.split(" ")[0], ultimaVisita:fmtDate(r.lastVisit)});
+  window.open(wa(r.phone,msg),"_blank");
+  await api("POST",`/retorno/${pid}/enviado`);
+  await reloadAll();
+}
+async function setRetornoMeses(pid, v){
+  const meses = v ? parseInt(v) : null;
+  await api("PUT",`/retorno/${pid}`,{meses});
+  FICHA_RETORNO = meses;
+  toast(meses?`Retorno deste paciente: ${meses} meses.`:"Retorno: padrão da clínica.");
+}
+
+/* ════════════════════════════════════════════
+   RELATÓRIOS (produção por dentista)
+════════════════════════════════════════════ */
+function _relShiftMes(delta){
+  let [y,m] = REL_MES.split("-").map(Number);
+  m += delta;
+  if(m===0){ m=12; y--; } else if(m===13){ m=1; y++; }
+  REL_MES = `${y}-${String(m).padStart(2,"0")}`;
+  render();
+}
+function vRelatorios(){
+  const mesLabel = (()=>{ const [y,m]=REL_MES.split("-").map(Number);
+    return ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"][m-1]+" "+y; })();
+  const linha = (nome, cor, profId)=>{
+    const match = x => (profId===null ? !x.profissionalId : x.profissionalId===profId);
+    const concluidas = DB.appointments.filter(a=>match(a) && a.status==="concluido" && a.date.slice(0,7)===REL_MES).length;
+    const agendadas = DB.appointments.filter(a=>match(a) && a.date.slice(0,7)===REL_MES && a.status!=="cancelado").length;
+    const recebido = (DB.lancamentos||[]).filter(l=>match(l) && l.pagoEm && l.pagoEm.slice(0,7)===REL_MES).reduce((s,l)=>s+l.valor,0);
+    const emAberto = (DB.lancamentos||[]).filter(l=>match(l) && !l.pagoEm).reduce((s,l)=>s+l.valor,0);
+    const orcAprov = (DB.orcamentos||[]).filter(o=>match(o) && o.status==="aprovado" && o.data.slice(0,7)===REL_MES);
+    const orcAprovTotal = orcAprov.reduce((s,o)=>s+o.total,0);
+    if(!agendadas && !recebido && !emAberto && !orcAprov.length) return "";
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span class="prof-dot" style="background:${cor};width:12px;height:12px"></span>
+        <b style="font-size:14px">${esc(nome)}</b>
+      </div>
+      <div class="grid g4">
+        <div class="stat" style="border:none;padding:8px 4px"><b style="font-size:18px">${concluidas}<span style="font-size:12px;color:var(--mut)">/${agendadas}</span></b><span>Concluídas / agendadas</span></div>
+        <div class="stat" style="border:none;padding:8px 4px"><b style="font-size:18px;color:var(--green)">${fmtMoney(recebido)}</b><span>Recebido no mês</span></div>
+        <div class="stat" style="border:none;padding:8px 4px"><b style="font-size:18px">${fmtMoney(emAberto)}</b><span>Em aberto (total)</span></div>
+        <div class="stat" style="border:none;padding:8px 4px"><b style="font-size:18px">${orcAprov.length}<span style="font-size:12px;color:var(--mut)"> · ${fmtMoney(orcAprovTotal)}</span></b><span>Orçamentos aprovados</span></div>
+      </div>
+    </div>`;
+  };
+  const profs = DB.profissionais.slice().sort((a,b)=>a.nome.localeCompare(b.nome));
+  const corpo = profs.map(p=>linha(p.nome, p.cor, p.id)).join("") + linha("Sem dentista atribuído", "#94a3b8", null);
+  return `${header("Relatórios","Produção e faturamento por dentista.")}
+  <div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_relShiftMes(-1)">${IC.left}</button>
+    <span style="font-size:14px;font-weight:700;color:#334155">${mesLabel}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_relShiftMes(1)">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="REL_MES=todayISO().slice(0,7);render()">Mês atual</button>
+  </div>
+  ${corpo || empty("Nenhum movimento neste mês.")}`;
 }
 
 /* ════════════════════════════════════════════
@@ -1571,6 +1698,7 @@ function vSettings(){
   <div class="card" style="margin-bottom:12px"><h2>Geral</h2>
     <label class="f"><span>Link de avaliação no Google</span><input id="s-link" value="${esc(s.googleReviewLink||"")}"></label>
     <label class="f"><span>Meses sem visita para paciente inativo</span><input type="number" min="1" id="s-months" value="${s.inactivityMonths||6}" style="max-width:110px"></label>
+    <label class="f"><span>Retorno preventivo padrão (meses)</span><input type="number" min="1" id="s-retorno" value="${s.retornoMesesPadrao||6}" style="max-width:110px"></label>
   </div>
   <div class="card" style="margin-bottom:12px">
     <h2>Notificações de agenda 🔔</h2>
@@ -1600,13 +1728,15 @@ function vSettings(){
   <div class="card" style="margin-bottom:12px"><h2>Modelos de mensagem (WhatsApp)</h2>
     <label class="f"><span>Confirmação — {nome} {procedimento} {data} {hora}</span><textarea id="s-confirm" rows="4">${esc(s.msgConfirm||"")}</textarea></label>
     <label class="f"><span>Reativação — {nome} {ultimaVisita}</span><textarea id="s-react" rows="4">${esc(s.msgReactivate||"")}</textarea></label>
+    <label class="f"><span>Retorno preventivo — {nome} {ultimaVisita}</span><textarea id="s-retorno-msg" rows="3">${esc(s.msgRetorno||"")}</textarea></label>
     <label class="f"><span>Pesquisa — {nome}</span><textarea id="s-survey" rows="4">${esc(s.msgSurvey||"")}</textarea></label>
     <label class="f"><span>Avaliação Google — {nome} {link}</span><textarea id="s-review" rows="4">${esc(s.msgReview||"")}</textarea></label>
     <label class="f"><span>Aniversário — {nome}</span><textarea id="s-bday" rows="3">${esc(s.msgAniversario||"")}</textarea></label>
   </div>
-  <div class="card" style="margin-bottom:12px"><h2>Backup e migração de dados</h2>
-    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Exporte todos os dados para guardar uma cópia, ou importe um backup de outro dispositivo/versão.</p>
+  <div class="card" style="margin-bottom:12px"><h2>Backup</h2>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">🛡️ Backup automático diário às 3h (horário de Brasília), guardado no Supabase Storage com os últimos ${30} mantidos. Você também pode gerar um agora ou exportar/importar manualmente.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn sm" onclick="backupAgora()">🛡️ Fazer backup agora</button>
       <button class="btn ghost sm" onclick="exportBackup()">${IC.upload} Exportar backup (.json)</button>
       <button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>
     </div>
@@ -1618,11 +1748,17 @@ async function saveSettings(){
   const g=i=>document.getElementById(i).value;
   await api("PUT","/settings",{
     googleReviewLink:g("s-link").trim(), inactivityMonths:g("s-months"),
+    retornoMesesPadrao:g("s-retorno"),
     msgConfirm:g("s-confirm"), msgReactivate:g("s-react"), msgSurvey:g("s-survey"),
-    msgReview:g("s-review"), msgAniversario:g("s-bday"),
+    msgReview:g("s-review"), msgAniversario:g("s-bday"), msgRetorno:g("s-retorno-msg"),
     notifLembreteMinutos:g("s-notif-min"), notifAtivas: document.getElementById("s-notif-ativas").checked?"true":"false"
   });
   await reloadAll(); toast("Ajustes salvos.");
+}
+async function backupAgora(){
+  toast("Gerando backup…");
+  const r = await api("POST","/backup/agora");
+  toast(`Backup salvo no Supabase: ${r.arquivo} 🛡️`);
 }
 async function exportBackup(){
   const data = await api("GET","/dump");
@@ -1686,6 +1822,7 @@ async function togglePush(){
     const perm = await Notification.requestPermission();
     if(perm!=="granted"){ toast("Permissão de notificação negada."); return; }
     const {publicKey} = await api("GET","/push/vapid-public-key");
+    if(!publicKey){ toast("Notificações indisponíveis: chaves VAPID não configuradas no servidor."); return; }
     const sub = await reg.pushManager.subscribe({
       userVisibleOnly:true,
       applicationServerKey: urlBase64ToUint8Array(publicKey)
