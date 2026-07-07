@@ -206,3 +206,13 @@ class Anexo(Base):
     tamanho: Mapped[int] = mapped_column(Integer, default=0)  # bytes
     storagePath: Mapped[str] = mapped_column(String(300))   # caminho no bucket
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class RetornoConfig(Base):
+    """Retorno preventivo por paciente. meses=None usa o padrão da clínica.
+    Tabela separada (em vez de coluna em patients) para nascer via create_all
+    sem SQL manual no Supabase."""
+    __tablename__ = "retorno_config"
+    patientId: Mapped[str] = mapped_column(String(20), primary_key=True)
+    meses: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sentAt: Mapped[str | None] = mapped_column(String(10), nullable=True)  # último convite de retorno enviado
