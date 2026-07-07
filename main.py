@@ -25,9 +25,9 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, Sessao, Tarefa, Usuario
+from models import Anexo, Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
-app = FastAPI(title="CRM Moura — Backend v2.1")
+app = FastAPI(title="CRM Moura — Backend v2.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +38,9 @@ app.add_middleware(
 
 FRONTEND = Path(__file__).parent / "frontend"
 
-VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "862sFwFCTOLC9V8QmuTpJSnEOoXEQI3tCLy1cF-vYWA")
-VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "BKC6xZ59AYX7je95otQV7O37JKcKPCSqpDV5YLaVT8X1kSiAi1lRRxgsmWISfzFAMX30_Hj0V8uv85kcqAsLeSU")
+# Chaves VAPID SOMENTE via variáveis de ambiente (sem fallback no código).
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
 
 scheduler = BackgroundScheduler()
@@ -50,6 +51,7 @@ def startup():
     init_db()
     if not scheduler.running:
         scheduler.add_job(checar_consultas_proximas, "interval", minutes=5, id="check_appts", replace_existing=True)
+        scheduler.add_job(backup_automatico, "cron", hour=6, minute=0, id="backup_diario", replace_existing=True)  # 06:00 UTC = 03:00 BRT
         scheduler.start()
 
 
@@ -166,14 +168,33 @@ def auth_setup(data: SetupIn):
         return {"token": token, "nome": u.nome}
 
 
+# Rate limiting do login: 5 tentativas erradas bloqueiam o e-mail por 15 minutos.
+# Em memória (reinicia com o deploy) — suficiente para barrar força bruta casual.
+LOGIN_FALHAS: dict[str, list] = {}  # email -> [tentativas, bloqueado_ate_epoch]
+LOGIN_MAX_TENTATIVAS = 5
+LOGIN_BLOQUEIO_SEG = 15 * 60
+
+
 @app.post("/api/auth/login")
 def auth_login(data: LoginIn):
+    email = data.email.strip().lower()
+    agora = time.time()
+    reg = LOGIN_FALHAS.get(email)
+    if reg and reg[1] > agora:
+        restam = int((reg[1] - agora) // 60) + 1
+        raise HTTPException(429, f"Muitas tentativas. Tente novamente em {restam} min.")
     with SessionLocal() as db:
-        u = db.query(Usuario).filter(Usuario.email == data.email.strip().lower()).first()
+        u = db.query(Usuario).filter(Usuario.email == email).first()
         if not u or not _verifica_senha(data.senha, u.senhaHash):
+            reg = LOGIN_FALHAS.setdefault(email, [0, 0])
+            reg[0] += 1
+            if reg[0] >= LOGIN_MAX_TENTATIVAS:
+                reg[1] = agora + LOGIN_BLOQUEIO_SEG
+                reg[0] = 0
             raise HTTPException(401, "E-mail ou senha incorretos.")
         if not u.ativo:
             raise HTTPException(403, "Usuário desativado. Fale com o administrador.")
+        LOGIN_FALHAS.pop(email, None)
         token = _criar_sessao(db, u)
         return {"token": token, "nome": u.nome}
 
@@ -1278,6 +1299,78 @@ def delete_orcamento(oid: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# RETORNOS PREVENTIVOS  (recall clínico: paciente deve voltar N meses após a última visita)
+# ══════════════════════════════════════════════════════════════════════════════
+class RetornoIn(BaseModel):
+    meses: int | None = None  # None = usa o padrão da clínica
+
+
+@app.get("/api/retorno/{pid}")
+def get_retorno(pid: str):
+    with SessionLocal() as db:
+        cfg = db.get(RetornoConfig, pid)
+        return {"meses": cfg.meses if cfg else None}
+
+
+@app.put("/api/retorno/{pid}")
+def set_retorno(pid: str, data: RetornoIn):
+    with SessionLocal() as db:
+        cfg = db.get(RetornoConfig, pid)
+        if not cfg:
+            cfg = RetornoConfig(patientId=pid)
+            db.add(cfg)
+        cfg.meses = data.meses if (data.meses and data.meses > 0) else None
+        db.commit()
+        return {"meses": cfg.meses}
+
+
+@app.post("/api/retorno/{pid}/enviado")
+def retorno_enviado(pid: str):
+    from datetime import date
+    with SessionLocal() as db:
+        cfg = db.get(RetornoConfig, pid)
+        if not cfg:
+            cfg = RetornoConfig(patientId=pid)
+            db.add(cfg)
+        cfg.sentAt = date.today().isoformat()
+        db.commit()
+        return {"ok": True}
+
+
+@app.get("/api/retornos")
+def list_retornos():
+    """Fila de recall: pacientes cujo retorno vence nos próximos 30 dias ou já venceu,
+    sem consulta futura marcada."""
+    from datetime import date
+    with SessionLocal() as db:
+        padrao_cfg = db.get(Config, "retornoMesesPadrao")
+        padrao = int(padrao_cfg.value) if padrao_cfg and padrao_cfg.value.isdigit() else 6
+        hoje = date.today().isoformat()
+        janela = (date.today() + timedelta(days=30)).isoformat()
+        futuros = {
+            a.patientId
+            for a in db.query(Consulta).filter(Consulta.date >= hoje, Consulta.status.in_(["agendado", "confirmado"])).all()
+        }
+        configs = {c.patientId: c for c in db.query(RetornoConfig).all()}
+        out = []
+        for p in db.query(Paciente).filter(Paciente.lastVisit.isnot(None)).all():
+            if p.id in futuros or not p.lastVisit:
+                continue
+            cfg = configs.get(p.id)
+            meses = cfg.meses if (cfg and cfg.meses) else padrao
+            due = _add_meses(p.lastVisit, meses)
+            if due <= janela:
+                out.append({
+                    "patientId": p.id, "name": p.name, "phone": p.phone,
+                    "lastVisit": p.lastVisit, "meses": meses,
+                    "due": due, "atrasado": due < hoje,
+                    "sentAt": cfg.sentAt if cfg else None,
+                })
+        out.sort(key=lambda x: x["due"])
+        return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FINANCEIRO  (lançamentos: cobranças e parcelas; valor em CENTAVOS)
 # ══════════════════════════════════════════════════════════════════════════════
 class LancamentoIn(BaseModel):
@@ -1422,22 +1515,78 @@ def delete_lancamento(lid: str):
 # ══════════════════════════════════════════════════════════════════════════════
 # DUMP / IMPORT
 # ══════════════════════════════════════════════════════════════════════════════
+def _dump_data(db) -> dict:
+    return {
+        "patients": [_row(p) for p in db.query(Paciente).all()],
+        "appointments": [_row(a) for a in db.query(Consulta).all()],
+        "surveys": [_row(s) for s in db.query(Pesquisa).all()],
+        "profissionais": [_row(p) for p in db.query(Profissional).all()],
+        "tarefas": [_row(t) for t in db.query(Tarefa).all()],
+        "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
+        "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
+        "orcamentos": [_row(o) for o in db.query(Orcamento).all()],
+        "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
+        "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in db.query(Anexo).all()],
+        "retorno_config": [_row(r) for r in db.query(RetornoConfig).all()],
+        "settings": {c.key: c.value for c in db.query(Config).all()},
+    }
+
+
 @app.get("/api/dump")
 def dump():
     with SessionLocal() as db:
-        return {
-            "patients": [_row(p) for p in db.query(Paciente).all()],
-            "appointments": [_row(a) for a in db.query(Consulta).all()],
-            "surveys": [_row(s) for s in db.query(Pesquisa).all()],
-            "profissionais": [_row(p) for p in db.query(Profissional).all()],
-            "tarefas": [_row(t) for t in db.query(Tarefa).all()],
-            "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
-            "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
-            "orcamentos": [_row(o) for o in db.query(Orcamento).all()],
-            "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
-            "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in db.query(Anexo).all()],
-            "settings": {c.key: c.value for c in db.query(Config).all()},
-        }
+        return _dump_data(db)
+
+
+def _sb_list(prefixo: str) -> list[str]:
+    """Lista nomes de arquivos numa pasta do bucket (mais recentes primeiro)."""
+    r = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/list/{ANEXO_BUCKET}",
+        headers=_sb_headers("application/json"),
+        json={"prefix": prefixo, "limit": 1000, "sortBy": {"column": "name", "order": "desc"}},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        return []
+    return [o["name"] for o in r.json() if o.get("name")]
+
+
+BACKUP_RETENCAO = 30  # mantém os 30 backups mais recentes
+
+
+def _fazer_backup() -> str:
+    """Gera o dump completo e envia ao Supabase Storage. Retorna o nome do arquivo."""
+    with SessionLocal() as db:
+        data = _dump_data(db)
+    blob = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+    nome = f"backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    _sb_upload(f"_backups/{nome}", blob, "application/json")
+    for velho in _sb_list("_backups")[BACKUP_RETENCAO:]:
+        _sb_delete(f"_backups/{velho}")
+    return nome
+
+
+def backup_automatico():
+    """Job diário do scheduler. Silencioso: nunca derruba a aplicação."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        _fazer_backup()
+    except Exception:
+        pass
+
+
+@app.post("/api/backup/agora", status_code=201)
+def backup_agora():
+    _sb_configurado()
+    nome = _fazer_backup()
+    return {"ok": True, "arquivo": nome}
+
+
+@app.get("/api/backups")
+def list_backups():
+    _sb_configurado()
+    return {"arquivos": _sb_list("_backups")[:BACKUP_RETENCAO]}
 
 
 class DumpIn(BaseModel):
