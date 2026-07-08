@@ -187,10 +187,14 @@ const IC = {
   doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
   bell:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>',
   chart:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
+  receipt:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 2h16v20l-3-2-3 2-3-2-3 2-3-2-1 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/></svg>',
+  camera:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+  print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+  alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
 };
 
 /* ── estado global ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[], retornos:[] };
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[], retornos:[], despesas:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
@@ -203,6 +207,7 @@ let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let REL_MES = todayISO().slice(0,7);  // mês do relatório por dentista
+let DESP_MES = todayISO().slice(0,7); // mês do painel de gastos
 let FICHA_RETORNO = null;     // meses de retorno custom do paciente da ficha (null = padrão)
 let SEARCH_Q = "";
 let CHAT_CANAL = "geral";
@@ -247,7 +252,7 @@ async function api(method, path, body) {
 }
 
 async function reloadAll() {
-  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
@@ -258,8 +263,9 @@ async function reloadAll() {
     api("GET", "/financeiro"),
     api("GET", "/orcamentos"),
     api("GET", "/retornos"),
+    api("GET", "/despesas"),
   ]);
-  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, chat: DB.chat||[] };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas, chat: DB.chat||[] };
   render();
 }
 
@@ -353,6 +359,7 @@ const NAV = [
   {id:"agenda",label:"Agenda",ic:IC.cal},
   {id:"financeiro",label:"Financeiro",ic:IC.money,badge:"financeiro"},
   {id:"orcamentos",label:"Orçamentos",ic:IC.doc,badge:"orcamentos"},
+  {id:"gastos",label:"Gastos",ic:IC.receipt},
   {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
   {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
   {id:"retornos",label:"Retornos",ic:IC.bell,badge:"retornos"},
@@ -383,7 +390,7 @@ function render(){
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
-  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
+  const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, gastos:vGastos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
     retornos:vRetornos, relatorios:vRelatorios,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
@@ -448,10 +455,12 @@ function vPatients(){
   const q = SEARCH_Q.trim().toLowerCase();
   const qd = digits(q);
   const list = DB.patients.filter(p=>
-    !q || p.name.toLowerCase().includes(q) || (qd.length>0 && digits(p.phone).includes(qd))
+    !q || p.name.toLowerCase().includes(q) ||
+    (p.numProntuario||"").toLowerCase().includes(q) ||
+    (qd.length>0 && (digits(p.phone).includes(qd) || digits(p.cpf).includes(qd)))
   ).sort((a,b)=>a.name.localeCompare(b.name));
   return `${header("Pacientes",DB.patients.length+" cadastrados",`<button class="btn" onclick="openPatientForm()">${IC.plus} Novo</button>`)}
-  <div class="searchbar">${IC.search}<input value="${esc(SEARCH_Q)}" oninput="SEARCH_Q=this.value;renderKeepFocus(this)" placeholder="Buscar por nome ou telefone…"></div>
+  <div class="searchbar">${IC.search}<input value="${esc(SEARCH_Q)}" oninput="SEARCH_Q=this.value;renderKeepFocus(this)" placeholder="Buscar por nome, telefone, prontuário ou CPF…"></div>
   ${list.length===0?empty(SEARCH_Q?"Nenhum paciente encontrado.":"Nenhum paciente cadastrado ainda."):
   `<div class="card" style="padding:4px 16px">`+list.map(p=>{
     const isBday = p.birth && p.birth.slice(5) === hoje;
@@ -459,7 +468,7 @@ function vPatients(){
       <div class="avatar" style="${isBday?"background:#fde68a;color:#92400e":""}">${isBday?"🎂":initials(p.name)}</div>
       <div class="grow">
         <div style="font-weight:500;font-size:14px">${esc(p.name)}${isBday?' <span style="color:#d97706;font-size:12px">Aniversário hoje!</span>':""}</div>
-        <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
+        <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${p.cpf?" · CPF: "+esc(p.cpf):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
       </div>
       ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
       <button class="btn ghost sm" onclick="openFicha('${p.id}')">📋 Prontuário</button>
@@ -482,7 +491,10 @@ async function sendBirthday(id){
   toast("Parabéns enviado!");
 }
 function openPatientForm(id){
-  const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:"",numProntuario:""};
+  const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:"",numProntuario:"",
+    rg:"",orgaoExpedidor:"",cpf:"",naturalidade:"",nacionalidade:"Brasileira",estadoCivil:"",profissao:"",localTrabalho:"",enderecoResidencial:"",indicadoPor:"",
+    respNome:"",respRg:"",respCpf:"",respTelefone:"",respEmail:"",
+    alergias:"",medicacoes:"",condicoesSistemicas:""};
   modal(id?"Editar paciente":"Novo paciente",`
     <label class="f"><span>Nome completo *</span><input id="f-name" value="${esc(p.name)}"></label>
     <div class="grid g2">
@@ -494,13 +506,68 @@ function openPatientForm(id){
       <label class="f"><span>Última visita</span><input type="date" id="f-last" value="${p.lastVisit||""}"></label>
     </div>
     <label class="f"><span>E-mail</span><input id="f-email" value="${esc(p.email)}"></label>
+
+    <details style="margin-bottom:11px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#475569;padding:6px 0">🪪 Identificação civil (opcional)</summary>
+      <div style="padding-top:8px">
+        <div class="grid g2">
+          <label class="f"><span>RG</span><input id="f-rg" value="${esc(p.rg||"")}"></label>
+          <label class="f"><span>Órgão expedidor</span><input id="f-orgao" value="${esc(p.orgaoExpedidor||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>CPF</span><input id="f-cpf" value="${esc(p.cpf||"")}" placeholder="000.000.000-00"></label>
+          <label class="f"><span>Estado civil</span><input id="f-civil" value="${esc(p.estadoCivil||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Naturalidade</span><input id="f-natur" value="${esc(p.naturalidade||"")}"></label>
+          <label class="f"><span>Nacionalidade</span><input id="f-nac" value="${esc(p.nacionalidade||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Profissão</span><input id="f-prof" value="${esc(p.profissao||"")}"></label>
+          <label class="f"><span>Local de trabalho</span><input id="f-trab" value="${esc(p.localTrabalho||"")}"></label>
+        </div>
+        <label class="f"><span>Endereço residencial</span><input id="f-end" value="${esc(p.enderecoResidencial||"")}"></label>
+        <label class="f"><span>Indicado por</span><input id="f-indic" value="${esc(p.indicadoPor||"")}"></label>
+      </div>
+    </details>
+
+    <details style="margin-bottom:11px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#475569;padding:6px 0">👨‍👩‍👧 Responsável legal (paciente menor)</summary>
+      <div style="padding-top:8px">
+        <label class="f"><span>Nome</span><input id="f-r-nome" value="${esc(p.respNome||"")}"></label>
+        <div class="grid g2">
+          <label class="f"><span>RG</span><input id="f-r-rg" value="${esc(p.respRg||"")}"></label>
+          <label class="f"><span>CPF</span><input id="f-r-cpf" value="${esc(p.respCpf||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Telefone</span><input id="f-r-tel" value="${esc(p.respTelefone||"")}"></label>
+          <label class="f"><span>E-mail</span><input id="f-r-email" value="${esc(p.respEmail||"")}"></label>
+        </div>
+      </div>
+    </details>
+
+    <details open style="margin-bottom:11px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--rose);padding:6px 0">⚠️ Alertas clínicos</summary>
+      <div style="padding-top:8px">
+        <label class="f"><span>Alergias</span><input id="f-alerg" value="${esc(p.alergias||"")}" placeholder="Ex: Penicilina, Dipirona"></label>
+        <label class="f"><span>Medicações em uso</span><input id="f-medic" value="${esc(p.medicacoes||"")}"></label>
+        <label class="f"><span>Condições sistêmicas</span><input id="f-cond" value="${esc(p.condicoesSistemicas||"")}" placeholder="Ex: Diabetes, Hipertensão, Gestante"></label>
+      </div>
+    </details>
+
     <label class="f"><span>Observações clínicas</span><textarea id="f-notes" rows="3">${esc(p.notes)}</textarea></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="savePatient('${id||""}')">Salvar</button></div>`);
 }
 async function savePatient(id){
   const g=i=>document.getElementById(i).value.trim();
-  const f={name:g("f-name"),phone:g("f-phone"),email:g("f-email"),birth:g("f-birth")||null,lastVisit:g("f-last")||null,notes:g("f-notes"),numProntuario:g("f-pron")};
+  const f={
+    name:g("f-name"),phone:g("f-phone"),email:g("f-email"),birth:g("f-birth")||null,lastVisit:g("f-last")||null,notes:g("f-notes"),numProntuario:g("f-pron"),
+    rg:g("f-rg"),orgaoExpedidor:g("f-orgao"),cpf:g("f-cpf"),naturalidade:g("f-natur"),nacionalidade:g("f-nac"),estadoCivil:g("f-civil"),
+    profissao:g("f-prof"),localTrabalho:g("f-trab"),enderecoResidencial:g("f-end"),indicadoPor:g("f-indic"),
+    respNome:g("f-r-nome"),respRg:g("f-r-rg"),respCpf:g("f-r-cpf"),respTelefone:g("f-r-tel"),respEmail:g("f-r-email"),
+    alergias:g("f-alerg"),medicacoes:g("f-medic"),condicoesSistemicas:g("f-cond"),
+  };
   if(!f.name || digits(f.phone).length<10){ toast("Preencha nome e telefone válido."); return; }
   if(id){ await api("PUT",`/patients/${id}`,{...f,id}); } else { await api("POST","/patients",f); }
   closeModal(); await reloadAll(); toast("Paciente salvo.");
@@ -916,13 +983,41 @@ function openReceberForm(id){
       <label class="f"><span>Forma de pagamento</span><select id="r-forma">${Object.entries(FORMAS_PGTO).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
       <label class="f"><span>Data do recebimento</span><input type="date" id="r-data" value="${todayISO()}"></label>
     </div>
+    <label class="f" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="r-parcial" style="width:auto" onchange="document.getElementById('r-parcial-box').style.display=this.checked?'block':'none'">
+      <span style="margin:0">Recebimento parcial</span>
+    </label>
+    <div id="r-parcial-box" style="display:none">
+      <div class="grid g2">
+        <label class="f"><span>Valor recebido agora (R$)</span><input id="r-valor" inputmode="decimal" placeholder="${(l.valor/100).toFixed(2).replace(".",",")}"></label>
+        <label class="f"><span>Novo vencimento do restante</span><input type="date" id="r-restante-venc" value="${todayISO()}"></label>
+      </div>
+      <p class="meta" id="r-restante-preview">O valor restante vira um novo lançamento em aberto.</p>
+    </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" style="background:var(--green)" onclick="receberLanc('${id}')">Confirmar recebimento</button></div>`);
+  document.getElementById("r-valor")?.addEventListener("input", ()=>{
+    const rec = parseMoney(document.getElementById("r-valor").value);
+    const rest = l.valor - rec;
+    document.getElementById("r-restante-preview").textContent =
+      rest>0 ? `Restam ${fmtMoney(rest)} como novo lançamento em aberto.` : "Informe um valor menor que o total da parcela.";
+  });
 }
 async function receberLanc(id){
+  const l = DB.lancamentos.find(x=>x.id===id);
   const g=i=>document.getElementById(i).value;
-  await api("PUT",`/financeiro/${id}/receber`,{formaPagamento:g("r-forma"), pagoEm:g("r-data")||null});
-  closeModal(); await reloadAll(); toast("Recebimento registrado. 💰");
+  const payload = { formaPagamento:g("r-forma"), pagoEm:g("r-data")||null };
+  const parcial = document.getElementById("r-parcial").checked;
+  if(parcial){
+    const valorRecebido = parseMoney(g("r-valor"));
+    if(valorRecebido<=0 || valorRecebido>=l.valor){ toast("Informe um valor parcial menor que o total da parcela."); return; }
+    if(!g("r-restante-venc")){ toast("Informe o vencimento do valor restante."); return; }
+    payload.valorRecebido = valorRecebido;
+    payload.restanteVencimento = g("r-restante-venc");
+  }
+  await api("PUT",`/financeiro/${id}/receber`,payload);
+  closeModal(); await reloadAll();
+  toast(parcial ? "Pagamento parcial registrado — restante em aberto. 💰" : "Recebimento registrado. 💰");
 }
 async function estornarLanc(id){
   if(!confirm("Estornar este recebimento? O lançamento voltará para 'em aberto'.")) return;
@@ -1097,6 +1192,82 @@ async function delOrc(id){
 }
 
 /* ════════════════════════════════════════════
+   GASTOS DO CONSULTÓRIO
+════════════════════════════════════════════ */
+const CATEGORIAS_DESPESA = { aluguel:"Aluguel", material:"Material", laboratorio:"Laboratório", salario:"Salário", marketing:"Marketing", equipamento:"Equipamento", outro:"Outro" };
+function _despShiftMes(delta){
+  let [y,m] = DESP_MES.split("-").map(Number);
+  m += delta;
+  if(m===0){ m=12; y--; } else if(m===13){ m=1; y++; }
+  DESP_MES = `${y}-${String(m).padStart(2,"0")}`;
+  render();
+}
+function vGastos(){
+  const mesLabel = (()=>{ const [y,m]=DESP_MES.split("-").map(Number);
+    return ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"][m-1]+" "+y; })();
+  const doMes = (DB.despesas||[]).filter(d=>d.data.slice(0,7)===DESP_MES).sort((a,b)=>b.data.localeCompare(a.data));
+  const total = doMes.reduce((s,d)=>s+d.valor,0);
+  const porCat = {};
+  doMes.forEach(d=>{ porCat[d.categoria]=(porCat[d.categoria]||0)+d.valor; });
+  const catsHTML = Object.entries(porCat).sort((a,b)=>b[1]-a[1]).map(([k,v])=>
+    `<span class="pill" style="background:#f1f5f9;color:#334155;border-color:var(--line);margin-right:6px;margin-bottom:6px;display:inline-block">${CATEGORIAS_DESPESA[k]||k}: ${fmtMoney(v)}</span>`).join("");
+  return `${header("Gastos do consultório","Despesas fixas e variáveis, com comprovante opcional.",`<button class="btn" onclick="openDespesaForm()">${IC.plus} Novo gasto</button>`)}
+  <div class="daynav">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_despShiftMes(-1)">${IC.left}</button>
+    <span style="font-size:14px;font-weight:700;color:#334155">${mesLabel}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="_despShiftMes(1)">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="DESP_MES=todayISO().slice(0,7);render()">Mês atual</button>
+  </div>
+  <div class="stat" style="margin-bottom:12px;max-width:220px"><b style="color:var(--rose)">${fmtMoney(total)}</b><span>Total no mês</span></div>
+  ${catsHTML?`<div style="margin-bottom:14px">${catsHTML}</div>`:""}
+  ${doMes.length===0?empty("Nenhum gasto registrado neste mês."):
+  `<div class="card" style="padding:4px 16px">`+doMes.map(d=>`
+    <div class="row">
+      <div style="text-align:center;min-width:74px"><b style="font-size:13px;color:var(--rose)">${fmtMoney(d.valor)}</b><span class="meta" style="display:block">${fmtDate(d.data)}</span></div>
+      <div class="grow"><div style="font-weight:500;font-size:14px">${esc(d.descricao)||CATEGORIAS_DESPESA[d.categoria]}</div>
+        <div class="meta">${CATEGORIAS_DESPESA[d.categoria]||d.categoria}</div></div>
+      ${d.comprovantePath?`<button class="btn ghost sm" onclick="verComprovanteDespesa('${d.id}')">${IC.receipt} Comprovante</button>`:""}
+      <button class="icon-btn del" onclick="delDespesa('${d.id}')" aria-label="Excluir">${IC.trash}</button>
+    </div>`).join("")+`</div>`}`;
+}
+function openDespesaForm(){
+  modal("Novo gasto",`
+    <label class="f"><span>Categoria</span><select id="d-cat">${Object.entries(CATEGORIAS_DESPESA).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Descrição</span><input id="d-desc" placeholder="Ex: Aluguel de julho"></label>
+    <div class="grid g2">
+      <label class="f"><span>Valor (R$) *</span><input id="d-valor" inputmode="decimal" placeholder="0,00"></label>
+      <label class="f"><span>Data *</span><input type="date" id="d-data" value="${todayISO()}"></label>
+    </div>
+    <label class="f"><span>Comprovante (opcional)</span><input type="file" id="d-comp" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveDespesa()">Salvar</button></div>`);
+}
+async function saveDespesa(){
+  const g=i=>document.getElementById(i);
+  const valor = parseMoney(g("d-valor").value);
+  if(valor<=0){ toast("Informe um valor válido."); return; }
+  if(!g("d-data").value){ toast("Informe a data."); return; }
+  const fd = new FormData();
+  fd.append("categoria", g("d-cat").value);
+  fd.append("descricao", g("d-desc").value||"");
+  fd.append("valor", String(valor));
+  fd.append("data", g("d-data").value);
+  const file = g("d-comp").files[0];
+  if(file) fd.append("comprovante", file);
+  await apiUpload("/despesas", fd);
+  closeModal(); await reloadAll(); toast("Gasto registrado.");
+}
+async function verComprovanteDespesa(id){
+  const r = await api("GET", `/despesas/${id}/comprovante-url`);
+  window.open(r.url, "_blank");
+}
+async function delDespesa(id){
+  if(!confirm("Excluir este gasto?")) return;
+  await api("DELETE", `/despesas/${id}`);
+  await reloadAll(); toast("Gasto excluído.");
+}
+
+/* ════════════════════════════════════════════
    FICHA DO PACIENTE (prontuário digital)
 ════════════════════════════════════════════ */
 async function openFicha(pid){
@@ -1112,7 +1283,154 @@ async function openFicha(pid){
   ]);
   FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses;
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
+  carregarFotoFicha(pid);
   window.scrollTo(0,0);
+}
+async function carregarFotoFicha(pid){
+  const el = document.getElementById("ficha-avatar");
+  if(!el) return;
+  try{
+    const r = await api("GET", `/patients/${pid}/foto/url`);
+    if(TAB==="ficha" && FICHA_ID===pid){
+      const el2 = document.getElementById("ficha-avatar");
+      if(el2) el2.innerHTML = `<img src="${r.url}" style="width:100%;height:100%;object-fit:cover" alt="Foto">`;
+    }
+  }catch(e){ /* sem foto ainda — mantém iniciais */ }
+}
+async function uploadFotoPaciente(input, pid){
+  const f = input.files[0]; if(!f) return;
+  input.value = "";
+  if(f.size > 15*1024*1024){ toast("Imagem maior que 15 MB."); return; }
+  toast("Enviando foto…");
+  const fd = new FormData();
+  fd.append("file", f);
+  await apiUpload(`/patients/${pid}/foto`, fd);
+  toast("Foto atualizada. 📷");
+  carregarFotoFicha(pid);
+}
+
+const CLINIC_LOGO_B64 = "data:image/jpeg;base64,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";
+
+/* ════════════════════════════════════════════
+   ANAMNESE — geração de ficha para impressão
+════════════════════════════════════════════ */
+function gerarAnamnese(pid){
+  const p = pById(pid); if(!p) return;
+  const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : "";
+  const menor = idade !== "" && idade < 18;
+  const linha = (v) => v ? esc(v) : "";
+  const win = window.open("", "_blank");
+  if(!win){ toast("Permita pop-ups para gerar a anamnese."); return; }
+  const html = `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+  <title>Anamnese - ${esc(p.name)}</title>
+  <style>
+    @page { size: A4; margin: 16mm 14mm; }
+    body{font-family:Georgia,'Times New Roman',serif;color:#111;font-size:12.5px;line-height:1.5}
+    .hd{display:flex;align-items:center;gap:14px;border-bottom:2px solid #0f766e;padding-bottom:10px;margin-bottom:16px}
+    .hd img{width:64px;height:64px;object-fit:contain}
+    .hd b{font-size:15px;display:block}
+    .hd .addr{font-size:11px;color:#444}
+    h2{font-size:13px;background:#0f766e;color:#fff;padding:4px 10px;margin:18px 0 10px;border-radius:3px}
+    .row{display:flex;gap:14px;margin-bottom:8px;flex-wrap:wrap}
+    .f{flex:1;min-width:140px}
+    .f label{display:block;font-size:9.5px;color:#666;text-transform:uppercase;letter-spacing:.3px}
+    .f .v{border-bottom:1px solid #999;min-height:16px;padding:1px 2px;font-size:12.5px}
+    .blank{border-bottom:1px solid #999;min-height:16px;margin-bottom:6px}
+    .blank.tall{min-height:16px}
+    .sig{margin-top:34px;text-align:center}
+    .sig .line{border-top:1px solid #333;width:320px;margin:0 auto 4px}
+    .odonto-box{border:1px solid #999;min-height:170px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;margin-bottom:10px}
+    .noprint{margin-bottom:14px}
+    @media print{ .noprint{display:none} }
+  </style></head><body>
+  <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button></div>
+
+  <div class="hd">
+    <img src="${CLINIC_LOGO_B64}" alt="Logo">
+    <div>
+      <b>MOURA ODONTOLOGIA &amp; ASSOCIADOS</b>
+      <div class="addr">Rua Coronel Emilio Gomes, 303, 2° Andar, Sala 04 — Centro — Irati — PR. CEP 84.500-054</div>
+      <div class="addr">Fone: (42) 99813-0406</div>
+    </div>
+  </div>
+
+  <h2>IDENTIFICAÇÃO DO PACIENTE</h2>
+  <div class="row">
+    <div class="f" style="flex:2"><label>Nome</label><div class="v">${esc(p.name)}</div></div>
+    <div class="f"><label>Nascimento</label><div class="v">${p.birth?fmtDate(p.birth):""}</div></div>
+    <div class="f" style="flex:.5"><label>Idade</label><div class="v">${idade}</div></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>Telefone</label><div class="v">${linha(p.phone)}</div></div>
+    <div class="f" style="flex:2"><label>E-mail</label><div class="v">${linha(p.email)}</div></div>
+    <div class="f"><label>Prontuário</label><div class="v">${linha(p.numProntuario)}</div></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>RG</label><div class="v">${linha(p.rg)}</div></div>
+    <div class="f"><label>Órgão exp.</label><div class="v">${linha(p.orgaoExpedidor)}</div></div>
+    <div class="f"><label>CPF</label><div class="v">${linha(p.cpf)}</div></div>
+    <div class="f"><label>Estado civil</label><div class="v">${linha(p.estadoCivil)}</div></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>Naturalidade</label><div class="v">${linha(p.naturalidade)}</div></div>
+    <div class="f"><label>Nacionalidade</label><div class="v">${linha(p.nacionalidade)}</div></div>
+    <div class="f"><label>Profissão</label><div class="v">${linha(p.profissao)}</div></div>
+  </div>
+  <div class="row">
+    <div class="f" style="flex:2"><label>Endereço residencial</label><div class="v">${linha(p.enderecoResidencial)}</div></div>
+    <div class="f"><label>Indicado por</label><div class="v">${linha(p.indicadoPor)}</div></div>
+  </div>
+
+  ${menor ? `
+  <h2>RESPONSÁVEL PELO TRATAMENTO (paciente menor de idade)</h2>
+  <div class="row">
+    <div class="f" style="flex:2"><label>Nome</label><div class="v">${linha(p.respNome)}</div></div>
+    <div class="f"><label>RG</label><div class="v">${linha(p.respRg)}</div></div>
+    <div class="f"><label>CPF</label><div class="v">${linha(p.respCpf)}</div></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>Telefone</label><div class="v">${linha(p.respTelefone)}</div></div>
+    <div class="f" style="flex:2"><label>E-mail</label><div class="v">${linha(p.respEmail)}</div></div>
+  </div>` : ""}
+
+  <h2>ALERTAS CLÍNICOS</h2>
+  <div class="row">
+    <div class="f"><label>Alergias</label><div class="v">${linha(p.alergias)}</div></div>
+    <div class="f"><label>Medicações em uso</label><div class="v">${linha(p.medicacoes)}</div></div>
+    <div class="f"><label>Condições sistêmicas</label><div class="v">${linha(p.condicoesSistemicas)}</div></div>
+  </div>
+
+  <h2>FICHA DE ANAMNESE</h2>
+  <p style="font-size:11px;margin-bottom:4px">Queixa Principal e Evolução da Doença Atual</p>
+  <div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div>
+
+  <p style="margin-top:16px;font-size:11.5px">Declaro que as informações acima prestadas são totalmente verdadeiras.</p>
+  <p style="font-size:11.5px">Irati, ____ de ________________ de ${new Date().getFullYear()}.</p>
+  <div class="sig"><div class="line"></div>Assinatura do Paciente ou seu Responsável Legal</div>
+
+  <div style="page-break-before:always"></div>
+  <div class="hd" style="border-bottom:none;margin-bottom:6px;padding-bottom:0">
+    <img src="${CLINIC_LOGO_B64}" alt="Logo" style="width:44px;height:44px">
+    <div><b style="font-size:13px">MOURA ODONTOLOGIA &amp; ASSOCIADOS</b><div class="addr">${esc(p.name)} — Exame físico e odontograma inicial</div></div>
+  </div>
+  <h2>EXAME FÍSICO</h2>
+  <p style="font-size:11px;margin-bottom:2px">Geral</p><div class="blank"></div>
+  <p style="font-size:11px;margin-bottom:2px">Extra-oral</p><div class="blank"></div>
+  <p style="font-size:11px;margin-bottom:2px">Intra-oral</p><div class="blank"></div>
+
+  <h2>ODONTOGRAMA INICIAL — Registro de Anormalidades e Patologias</h2>
+  <div class="odonto-box">(odontograma interativo em desenvolvimento — registrar manualmente por enquanto)</div>
+  <div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div>
+
+  <h2>DENTISTA RESPONSÁVEL</h2>
+  <div class="row">
+    <div class="f" style="flex:2"><label>Nome</label><div class="v"></div></div>
+    <div class="f"><label>CRO/PR</label><div class="v"></div></div>
+  </div>
+
+  </body></html>`;
+  win.document.write(html);
+  win.document.close();
 }
 function fmtDateTime(iso){
   if(!iso) return "";
@@ -1126,16 +1444,29 @@ function vFicha(){
   const lancs = (DB.lancamentos||[]).filter(l=>l.patientId===p.id).sort((a,b)=>b.vencimento.localeCompare(a.vencimento));
   const emAberto = lancs.filter(l=>!l.pagoEm).reduce((s,l)=>s+l.valor,0);
   const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : null;
+  const alertas = [p.alergias&&`Alergia: ${p.alergias}`, p.medicacoes&&`Medicação: ${p.medicacoes}`, p.condicoesSistemicas&&p.condicoesSistemicas].filter(Boolean);
   return `
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="go('patients')">${IC.left}</button>
-    <div class="avatar">${initials(p.name)}</div>
+    <div class="avatar" id="ficha-avatar" style="width:52px;height:52px;font-size:16px;overflow:hidden;cursor:pointer" onclick="document.getElementById('ficha-foto-input').click()" title="Clique para trocar a foto">${initials(p.name)}</div>
+    <input type="file" id="ficha-foto-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="uploadFotoPaciente(this,'${p.id}')">
     <div class="grow">
       <h1 style="font-size:19px">${esc(p.name)}</h1>
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
+    <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
   </div>
+
+  ${alertas.length?`<div class="card" style="margin-bottom:12px;background:#fff1f2;border-color:#fecdd3">
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <span style="color:var(--rose)">${IC.alert}</span>
+      <div class="grow">
+        <b style="font-size:13px;color:var(--rose)">Alertas clínicos</b>
+        <div style="font-size:13px;color:#881337;margin-top:2px">${alertas.map(esc).join(" · ")}</div>
+      </div>
+    </div>
+  </div>`:""}
 
   <div class="card" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px">
     <span style="font-size:13px;font-weight:600">🔔 Retorno preventivo:</span>
