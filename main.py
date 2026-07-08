@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Config, Consulta, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.6")
 
@@ -391,6 +391,24 @@ class PacienteIn(BaseModel):
     notes: str = ""
     reactivateSentAt: str | None = None
     birthdaySentYear: str | None = None
+    rg: str = ""
+    orgaoExpedidor: str = ""
+    cpf: str = ""
+    naturalidade: str = ""
+    nacionalidade: str = ""
+    estadoCivil: str = ""
+    profissao: str = ""
+    localTrabalho: str = ""
+    enderecoResidencial: str = ""
+    indicadoPor: str = ""
+    respNome: str = ""
+    respRg: str = ""
+    respCpf: str = ""
+    respTelefone: str = ""
+    respEmail: str = ""
+    alergias: str = ""
+    medicacoes: str = ""
+    condicoesSistemicas: str = ""
 
 
 @app.get("/api/patients")
@@ -1059,6 +1077,123 @@ def delete_anexo(aid: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# GASTOS DO CONSULTÓRIO  (despesas com comprovante opcional no Storage)
+# ══════════════════════════════════════════════════════════════════════════════
+DESPESA_CATEGORIAS = {"aluguel", "material", "laboratorio", "salario", "marketing", "equipamento", "outro"}
+
+
+@app.get("/api/despesas")
+def list_despesas():
+    with SessionLocal() as db:
+        rows = db.query(Despesa).order_by(Despesa.data.desc()).all()
+        return [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None} for d in rows]
+
+
+@app.post("/api/despesas", status_code=201)
+async def create_despesa(
+    categoria: str = Form("outro"),
+    descricao: str = Form(""),
+    valor: int = Form(...),
+    data: str = Form(...),
+    comprovante: UploadFile | None = File(None),
+):
+    if categoria not in DESPESA_CATEGORIAS:
+        categoria = "outro"
+    if valor <= 0:
+        raise HTTPException(422, "Informe um valor maior que zero.")
+    did = _new_id()
+    comp_nome = comp_mime = comp_path = None
+    if comprovante is not None and comprovante.filename:
+        _sb_configurado()
+        mime = (comprovante.content_type or "").lower()
+        if mime not in ANEXO_MIMES:
+            raise HTTPException(422, "Comprovante: use imagem (JPG, PNG, WEBP, GIF) ou PDF.")
+        conteudo = await comprovante.read()
+        if len(conteudo) > ANEXO_MAX_BYTES:
+            raise HTTPException(422, "Comprovante maior que 15 MB.")
+        comp_nome = comprovante.filename
+        comp_mime = mime
+        comp_path = f"_despesas/{did}_{_nome_seguro(comprovante.filename)}"
+        _sb_upload(comp_path, conteudo, mime)
+    with SessionLocal() as db:
+        d = Despesa(id=did, categoria=categoria, descricao=descricao.strip(), valor=valor, data=data,
+                    comprovanteNome=comp_nome, comprovanteMime=comp_mime, comprovantePath=comp_path)
+        db.add(d)
+        db.commit()
+        return {**_row(d), "created_at": d.created_at.isoformat()}
+
+
+@app.get("/api/despesas/{did}/comprovante-url")
+def despesa_comprovante_url(did: str):
+    _sb_configurado()
+    with SessionLocal() as db:
+        d = db.get(Despesa, did)
+        if not d or not d.comprovantePath:
+            raise HTTPException(404, "Sem comprovante.")
+        return {"url": _sb_signed_url(d.comprovantePath), "nome": d.comprovanteNome}
+
+
+@app.delete("/api/despesas/{did}", status_code=204)
+def delete_despesa(did: str):
+    with SessionLocal() as db:
+        d = db.get(Despesa, did)
+        if not d:
+            raise HTTPException(404)
+        path = d.comprovantePath
+        db.delete(d)
+        db.commit()
+    if path:
+        _sb_delete(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FOTO DO PACIENTE  (Supabase Storage; substitui as iniciais na ficha)
+# ══════════════════════════════════════════════════════════════════════════════
+@app.post("/api/patients/{pid}/foto", status_code=201)
+async def upload_foto_paciente(pid: str, file: UploadFile = File(...)):
+    _sb_configurado()
+    mime = (file.content_type or "").lower()
+    if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(422, "Use uma imagem JPG, PNG ou WEBP.")
+    conteudo = await file.read()
+    if len(conteudo) > ANEXO_MAX_BYTES:
+        raise HTTPException(422, "Imagem maior que 15 MB.")
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p:
+            raise HTTPException(404, "Paciente não encontrado.")
+        ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime]
+        path = f"_fotos/{pid}.{ext}"
+        _sb_upload(path, conteudo, mime)
+        p.fotoPath = path
+        db.commit()
+        return {"ok": True}
+
+
+@app.get("/api/patients/{pid}/foto/url")
+def foto_paciente_url(pid: str):
+    _sb_configurado()
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p or not p.fotoPath:
+            raise HTTPException(404, "Sem foto.")
+        return {"url": _sb_signed_url(p.fotoPath, segundos=600)}
+
+
+@app.delete("/api/patients/{pid}/foto", status_code=204)
+def delete_foto_paciente(pid: str):
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p:
+            raise HTTPException(404)
+        path = p.fotoPath
+        p.fotoPath = None
+        db.commit()
+    if path:
+        _sb_delete(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # PRONTUÁRIO  (evoluções clínicas IMUTÁVEIS: apenas criação e leitura)
 # ══════════════════════════════════════════════════════════════════════════════
 class EvolucaoIn(BaseModel):
@@ -1472,6 +1607,8 @@ def update_lancamento(lid: str, data: LancamentoIn):
 class ReceberIn(BaseModel):
     formaPagamento: str = "dinheiro"
     pagoEm: str | None = None  # default: hoje
+    valorRecebido: int | None = None  # centavos; None = valor cheio da parcela
+    restanteVencimento: str | None = None  # obrigatório se valorRecebido < valor da parcela
 
 
 @app.put("/api/financeiro/{lid}/receber")
@@ -1481,11 +1618,32 @@ def receber_lancamento(lid: str, data: ReceberIn):
         l = db.get(Lancamento, lid)
         if not l:
             raise HTTPException(404, "Lançamento não encontrado")
+        if l.pagoEm:
+            raise HTTPException(409, "Este lançamento já está pago.")
+        recebido = data.valorRecebido if (data.valorRecebido and data.valorRecebido > 0) else l.valor
+        if recebido > l.valor:
+            raise HTTPException(422, "O valor recebido não pode ser maior que a parcela.")
+        restante_id = None
+        if recebido < l.valor:
+            if not data.restanteVencimento:
+                raise HTTPException(422, "Informe o novo vencimento do valor restante.")
+            restante = Lancamento(
+                id=_new_id(), patientId=l.patientId, profissionalId=l.profissionalId,
+                appointmentId=l.appointmentId,
+                descricao=(l.descricao or "Cobrança") + " (restante)",
+                valor=l.valor - recebido, vencimento=data.restanteVencimento,
+                pagoEm=None, formaPagamento="", numOrcamento=l.numOrcamento, observacoes=l.observacoes,
+            )
+            db.add(restante)
+            restante_id = restante.id
+        l.valor = recebido
         l.pagoEm = data.pagoEm or date.today().isoformat()
         l.formaPagamento = data.formaPagamento
         db.commit()
         db.refresh(l)
-        return _lanc_row(db, l)
+        r = _lanc_row(db, l)
+        r["restanteId"] = restante_id
+        return r
 
 
 @app.put("/api/financeiro/{lid}/estornar")
@@ -1528,6 +1686,7 @@ def _dump_data(db) -> dict:
         "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
         "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in db.query(Anexo).all()],
         "retorno_config": [_row(r) for r in db.query(RetornoConfig).all()],
+        "despesas": [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None} for d in db.query(Despesa).all()],
         "settings": {c.key: c.value for c in db.query(Config).all()},
     }
 
