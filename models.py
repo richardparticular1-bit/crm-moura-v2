@@ -33,6 +33,29 @@ class Paciente(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     reactivateSentAt: Mapped[str | None] = mapped_column(String(10), nullable=True)
     birthdaySentYear: Mapped[str | None] = mapped_column(String(4), nullable=True)  # ano do último envio de aniversário
+    # ── identificação civil (v2.7) ──
+    rg: Mapped[str] = mapped_column(String(30), default="")
+    orgaoExpedidor: Mapped[str] = mapped_column(String(20), default="")
+    cpf: Mapped[str] = mapped_column(String(20), default="")
+    naturalidade: Mapped[str] = mapped_column(String(100), default="")
+    nacionalidade: Mapped[str] = mapped_column(String(60), default="")
+    estadoCivil: Mapped[str] = mapped_column(String(30), default="")
+    profissao: Mapped[str] = mapped_column(String(100), default="")
+    localTrabalho: Mapped[str] = mapped_column(String(150), default="")
+    enderecoResidencial: Mapped[str] = mapped_column(String(250), default="")
+    indicadoPor: Mapped[str] = mapped_column(String(150), default="")
+    # ── responsável legal (paciente menor) ──
+    respNome: Mapped[str] = mapped_column(String(150), default="")
+    respRg: Mapped[str] = mapped_column(String(30), default="")
+    respCpf: Mapped[str] = mapped_column(String(20), default="")
+    respTelefone: Mapped[str] = mapped_column(String(30), default="")
+    respEmail: Mapped[str] = mapped_column(String(120), default="")
+    # ── alertas clínicos ──
+    alergias: Mapped[str] = mapped_column(Text, default="")
+    medicacoes: Mapped[str] = mapped_column(Text, default="")
+    condicoesSistemicas: Mapped[str] = mapped_column(Text, default="")  # ex: "Diabetes, Hipertensão"
+    # ── foto ──
+    fotoPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
@@ -216,3 +239,18 @@ class RetornoConfig(Base):
     patientId: Mapped[str] = mapped_column(String(20), primary_key=True)
     meses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sentAt: Mapped[str | None] = mapped_column(String(10), nullable=True)  # último convite de retorno enviado
+
+
+class Despesa(Base):
+    """Gasto do consultório (aluguel, material, laboratório, salário...).
+    Comprovante opcional no Supabase Storage (mesma infra dos anexos)."""
+    __tablename__ = "despesas"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    categoria: Mapped[str] = mapped_column(String(30), default="outro")
+    descricao: Mapped[str] = mapped_column(String(200), default="")
+    valor: Mapped[int] = mapped_column(Integer, default=0)  # CENTAVOS
+    data: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD
+    comprovanteNome: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    comprovanteMime: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    comprovantePath: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
