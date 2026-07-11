@@ -221,7 +221,35 @@ let AUTH_TOKEN = localStorage.getItem("crm_token") || "";
 let AUTH_NOME = localStorage.getItem("crm_nome") || "";
 
 /* ── API helpers ── */
+/* Evita cliques duplos criando registros repetidos: chamadas de escrita
+   (POST/PUT/DELETE) idênticas e simultâneas são ignoradas — a segunda
+   tentativa não chega a sair pela rede. */
+const _WRITE_METHODS = new Set(["POST","PUT","DELETE"]);
+const _inFlight = new Set();
+function _modalBusy(busy){
+  const modalEl = document.querySelector("#modalBg .modal");
+  if(!modalEl) return;
+  let overlay = modalEl.querySelector(".busy-overlay");
+  if(busy){
+    modalEl.style.position = "relative";
+    if(!overlay){
+      overlay = document.createElement("div");
+      overlay.className = "busy-overlay";
+      overlay.style.cssText = "position:absolute;inset:0;background:rgba(255,255,255,.55);display:flex;align-items:center;justify-content:center;border-radius:18px;z-index:5";
+      overlay.innerHTML = `<span class="spinner" style="border-color:var(--teal-700);border-top-color:transparent;width:22px;height:22px"></span>`;
+      modalEl.appendChild(overlay);
+    }
+  } else if(overlay) overlay.remove();
+}
+
 async function api(method, path, body) {
+  const key = method + ":" + path + ":" + (body ? JSON.stringify(body) : "");
+  const isWrite = _WRITE_METHODS.has(method);
+  if (isWrite && _inFlight.has(key)) {
+    // Clique duplicado: ignora silenciosamente, sem segunda requisição nem toast de erro.
+    return new Promise(()=>{}); // nunca resolve/rejeita — a chamada original é a que vale
+  }
+  if (isWrite) { _inFlight.add(key); _modalBusy(true); }
   const opts = { method, headers:{"Content-Type":"application/json"} };
   if (AUTH_TOKEN) opts.headers["Authorization"] = "Bearer " + AUTH_TOKEN;
   if (body) opts.body = JSON.stringify(body);
@@ -229,16 +257,19 @@ async function api(method, path, body) {
   try {
     r = await fetch(API + path, opts);
   } catch(e) {
+    if (isWrite) { _inFlight.delete(key); _modalBusy(false); }
     toast("Erro de conexão com o servidor.");
     throw e;
   }
   if (r.status === 401 && !path.startsWith("/auth/")) {
+    if (isWrite) { _inFlight.delete(key); _modalBusy(false); }
     AUTH_TOKEN = ""; AUTH_NOME = "";
     localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
     showLogin();
     throw new Error("401");
   }
   if (!r.ok) {
+    if (isWrite) { _inFlight.delete(key); _modalBusy(false); }
     let msg = "Erro no servidor (" + r.status + ").";
     try {
       const j = await r.json();
@@ -247,6 +278,7 @@ async function api(method, path, body) {
     toast(msg);
     throw new Error(msg);
   }
+  if (isWrite) { _inFlight.delete(key); _modalBusy(false); }
   if (r.status === 204) return null;
   return r.json();
 }
@@ -275,21 +307,27 @@ async function reloadChat() {
 }
 
 async function apiUpload(path, formData) {
+  const key = "UPLOAD:" + path;
+  if (_inFlight.has(key)) return new Promise(()=>{}); // clique duplicado: ignora
+  _inFlight.add(key); _modalBusy(true);
   const opts = { method:"POST", body: formData, headers:{} };
   if (AUTH_TOKEN) opts.headers["Authorization"] = "Bearer " + AUTH_TOKEN;
   let r;
   try { r = await fetch(API + path, opts); }
-  catch(e){ toast("Erro de conexão com o servidor."); throw e; }
+  catch(e){ _inFlight.delete(key); _modalBusy(false); toast("Erro de conexão com o servidor."); throw e; }
   if (r.status === 401) {
+    _inFlight.delete(key); _modalBusy(false);
     AUTH_TOKEN=""; AUTH_NOME="";
     localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
     showLogin(); throw new Error("401");
   }
   if (!r.ok) {
+    _inFlight.delete(key); _modalBusy(false);
     let msg = "Erro no servidor (" + r.status + ").";
     try { const j = await r.json(); if (j && j.detail) msg = typeof j.detail==="string"? j.detail : msg; } catch(_){}
     toast(msg); throw new Error(msg);
   }
+  _inFlight.delete(key); _modalBusy(false);
   return r.json();
 }
 const fmtBytes = b => b>=1048576 ? (b/1048576).toFixed(1)+" MB" : b>=1024 ? Math.round(b/1024)+" KB" : b+" B";
