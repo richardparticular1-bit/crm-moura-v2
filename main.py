@@ -1297,7 +1297,33 @@ def _orc_row(db, o: Orcamento, com_itens: bool = False) -> dict[str, Any]:
 def list_orcamentos():
     with SessionLocal() as db:
         rows = db.query(Orcamento).order_by(Orcamento.data.desc()).all()
-        return [_orc_row(db, o) for o in rows]
+        if not rows:
+            return []
+        ids = [o.id for o in rows]
+        patient_ids = {o.patientId for o in rows}
+        pacientes = {p.id: p for p in db.query(Paciente).filter(Paciente.id.in_(patient_ids)).all()}
+        profissionais = {p.id: p for p in db.query(Profissional).all()}
+        itens_por_orc: dict[str, list] = {}
+        for it in db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId.in_(ids)).all():
+            itens_por_orc.setdefault(it.orcamentoId, []).append(it)
+        com_cobranca = {
+            row[0] for row in db.query(Lancamento.numOrcamento)
+            .filter(Lancamento.numOrcamento.in_(ids)).distinct().all()
+        }
+        result = []
+        for o in rows:
+            r = _row(o)
+            r.pop("created_at", None)
+            pac = pacientes.get(o.patientId)
+            r["patientName"] = pac.name if pac else "Paciente removido"
+            prof = profissionais.get(o.profissionalId) if o.profissionalId else None
+            r["profissionalNome"] = prof.nome if prof else ""
+            itens = itens_por_orc.get(o.id, [])
+            r["total"] = sum(i.valor * i.quantidade for i in itens)
+            r["numItens"] = len(itens)
+            r["cobrancasGeradas"] = o.id in com_cobranca
+            result.append(r)
+        return result
 
 
 @app.get("/api/orcamentos/{oid}")
