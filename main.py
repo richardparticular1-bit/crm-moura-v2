@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.6")
 
@@ -1191,6 +1191,82 @@ def delete_foto_paciente(pid: str):
         db.commit()
     if path:
         _sb_delete(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ODONTOGRAMA  (marcações IMUTÁVEIS por dente/face; estado atual = última por chave)
+# ══════════════════════════════════════════════════════════════════════════════
+DENTES_VALIDOS = {str(d) for d in list(range(11,19))+list(range(21,29))+list(range(31,39))+list(range(41,49))
+                  + list(range(51,56))+list(range(61,66))+list(range(71,76))+list(range(81,86))}
+FACES_VALIDAS = {"oclusal", "vestibular", "lingual", "mesial", "distal", "dente"}
+STATUS_FACE = {"higido", "cariado", "restaurado", "fraturado"}
+STATUS_DENTE = {"ausente", "a_extrair", "implante", "coroa", "canal", "protese", "nenhum"}
+
+
+class OdontogramaMarcaIn(BaseModel):
+    patientId: str
+    profissionalId: int
+    dente: str
+    face: str
+    status: str
+    observacao: str = ""
+
+
+@app.post("/api/odontograma", status_code=201)
+def create_marca_odontograma(data: OdontogramaMarcaIn):
+    if data.dente not in DENTES_VALIDOS:
+        raise HTTPException(422, "Número de dente inválido.")
+    if data.face not in FACES_VALIDAS:
+        raise HTTPException(422, "Face inválida.")
+    validos = STATUS_DENTE if data.face == "dente" else STATUS_FACE
+    if data.status not in validos:
+        raise HTTPException(422, f"Status inválido para esta face. Use: {', '.join(sorted(validos))}")
+    with SessionLocal() as db:
+        if not db.get(Profissional, data.profissionalId):
+            raise HTTPException(422, "Informe o profissional responsável.")
+        m = OdontogramaMarca(
+            id=_new_id(), patientId=data.patientId, profissionalId=data.profissionalId,
+            dente=data.dente, face=data.face, status=data.status, observacao=data.observacao.strip(),
+        )
+        db.add(m)
+        db.commit()
+        db.refresh(m)
+        return {"id": m.id, "created_at": m.created_at.isoformat()}
+
+
+@app.get("/api/odontograma")
+def get_odontograma(patient_id: str):
+    with SessionLocal() as db:
+        rows = (
+            db.query(OdontogramaMarca)
+            .filter(OdontogramaMarca.patientId == patient_id)
+            .order_by(OdontogramaMarca.created_at.asc())
+            .all()
+        )
+        # estado atual: última marcação vence, por (dente, face)
+        latest: dict[tuple, OdontogramaMarca] = {}
+        for m in rows:
+            latest[(m.dente, m.face)] = m
+        estado: dict[str, dict] = {}
+        for (dente, face), m in latest.items():
+            if m.status in ("higido", "nenhum"):
+                continue
+            estado.setdefault(dente, {})
+            if face == "dente":
+                estado[dente]["dente"] = m.status
+            else:
+                estado[dente].setdefault("faces", {})[face] = m.status
+
+        profs = {p.id: p for p in db.query(Profissional).all()}
+        historico = []
+        for m in reversed(rows[-200:]):  # últimas 200, mais recente primeiro
+            prof = profs.get(m.profissionalId)
+            historico.append({
+                "id": m.id, "dente": m.dente, "face": m.face, "status": m.status,
+                "observacao": m.observacao, "profissionalNome": prof.nome if prof else "—",
+                "created_at": m.created_at.isoformat(),
+            })
+        return {"estado": estado, "historico": historico}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
