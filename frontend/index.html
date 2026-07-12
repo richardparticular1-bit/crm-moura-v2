@@ -1306,12 +1306,151 @@ async function delDespesa(id){
 }
 
 /* ════════════════════════════════════════════
+   ODONTOGRAMA (SVG interativo, por face)
+════════════════════════════════════════════ */
+const ODONTO_BLOCOS = [
+  {arch:"upper", mesial:"right", dentes:[18,17,16,15,14,13,12,11]},
+  {arch:"upper", mesial:"left",  dentes:[21,22,23,24,25,26,27,28]},
+  {arch:"lower", mesial:"right", dentes:[48,47,46,45,44,43,42,41]},
+  {arch:"lower", mesial:"left",  dentes:[31,32,33,34,35,36,37,38]},
+];
+const ODONTO_BLOCOS_DECID = [
+  {arch:"upper", mesial:"right", dentes:[55,54,53,52,51]},
+  {arch:"upper", mesial:"left",  dentes:[61,62,63,64,65]},
+  {arch:"lower", mesial:"right", dentes:[85,84,83,82,81]},
+  {arch:"lower", mesial:"left",  dentes:[71,72,73,74,75]},
+];
+const FACE_COR = { cariado:"#e11d48", restaurado:"#2563eb", fraturado:"#d97706" };
+const FACE_LABEL = { oclusal:"Oclusal/Incisal", vestibular:"Vestibular", lingual:"Lingual/Palatina", mesial:"Mesial", distal:"Distal" };
+const STATUS_FACE_LABEL = { higido:"Saudável (limpar marcação)", cariado:"Cárie", restaurado:"Restauração", fraturado:"Fratura" };
+const DENTE_BADGE = {
+  ausente:   {label:"✕", cor:"#64748b", nome:"Ausente/Extraído"},
+  a_extrair: {label:"!", cor:"#e11d48", nome:"A extrair"},
+  implante:  {label:"IM", cor:"#059669", nome:"Implante"},
+  coroa:     {label:"C", cor:"#d97706", nome:"Coroa"},
+  canal:     {label:"TC", cor:"#7c3aed", nome:"Tratamento de canal"},
+  protese:   {label:"PR", cor:"#0ea5e9", nome:"Prótese"},
+};
+const STATUS_DENTE_LABEL = { nenhum:"Nenhum (limpar)", ausente:"Ausente/Extraído", a_extrair:"A extrair", implante:"Implante", coroa:"Coroa", canal:"Tratamento de canal", protese:"Prótese" };
+
+function _odontoToothSVG(numero, estadoDente, bloco, interactive){
+  const T = 40, cell = T/3;
+  const faces = (estadoDente && estadoDente.faces) || {};
+  const denteStatus = estadoDente && estadoDente.dente;
+  const topFace = bloco.arch === "upper" ? "vestibular" : "lingual";
+  const bottomFace = bloco.arch === "upper" ? "lingual" : "vestibular";
+  const leftFace = bloco.mesial === "right" ? "distal" : "mesial";
+  const rightFace = bloco.mesial === "right" ? "mesial" : "distal";
+  const cellRect = (face, x, y) => {
+    const cor = faces[face] ? FACE_COR[faces[face]] : "#fff";
+    const click = interactive ? `onclick="onOdontoFaceClick('${numero}','${face}')" style="cursor:pointer"` : "";
+    return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${faces[face]?" - "+STATUS_FACE_LABEL[faces[face]]:""}</title></rect>`;
+  };
+  let svg = `<svg width="${T}" height="${T+14}" viewBox="0 0 ${T} ${T+14}" style="overflow:visible">`;
+  svg += cellRect(topFace, cell, 0);
+  svg += cellRect(leftFace, 0, cell);
+  svg += cellRect("oclusal", cell, cell);
+  svg += cellRect(rightFace, cell*2, cell);
+  svg += cellRect(bottomFace, cell, cell*2);
+  if(denteStatus && DENTE_BADGE[denteStatus]){
+    const b = DENTE_BADGE[denteStatus];
+    if(denteStatus==="ausente"){
+      svg += `<line x1="1" y1="1" x2="${T-1}" y2="${T-1}" stroke="#64748b" stroke-width="2.4"/><line x1="${T-1}" y1="1" x2="1" y2="${T-1}" stroke="#64748b" stroke-width="2.4"/>`;
+    }
+    svg += `<circle cx="${T/2}" cy="${T+7}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${T+9.5}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
+  }
+  const numClick = interactive ? `onclick="onOdontoDenteClick('${numero}')" style="cursor:pointer"` : "";
+  svg += `<text x="${T/2}" y="-4" font-size="10" font-weight="700" fill="#334155" text-anchor="middle" font-family="sans-serif" ${numClick}>${numero}</text>`;
+  svg += `</svg>`;
+  return svg;
+}
+function renderOdontograma(estado, interactive){
+  const linha = (blocos) => `<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-bottom:6px">` +
+    blocos.map(bl => `<div style="display:flex;gap:2px">` + bl.dentes.map(n => _odontoToothSVG(String(n), estado[String(n)], bl, interactive)).join("") + `</div>`).join(`<div style="width:14px"></div>`) + `</div>`;
+  const permanentes = `${linha([ODONTO_BLOCOS[0],ODONTO_BLOCOS[1]])}${linha([ODONTO_BLOCOS[2],ODONTO_BLOCOS[3]])}`;
+  const decid = `${linha([ODONTO_BLOCOS_DECID[0],ODONTO_BLOCOS_DECID[1]])}${linha([ODONTO_BLOCOS_DECID[2],ODONTO_BLOCOS_DECID[3]])}`;
+  return { permanentes, decid };
+}
+function odontoLegenda(){
+  const itens = [...Object.entries(FACE_COR).map(([k,c])=>({cor:c,nome:STATUS_FACE_LABEL[k]})), ...Object.values(DENTE_BADGE).map(b=>({cor:b.cor,nome:b.nome}))];
+  return `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px">` +
+    itens.map(i=>`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#64748b"><span style="width:11px;height:11px;border-radius:3px;background:${i.cor};display:inline-block"></span>${i.nome}</span>`).join("") + `</div>`;
+}
+
+let FICHA_ODONTO = { estado:{}, historico:[] };
+let ODONTO_DECID_VISIVEL = false;
+
+async function carregarOdontograma(pid){
+  FICHA_ODONTO = await api("GET", `/odontograma?patient_id=${encodeURIComponent(pid)}`);
+  if(TAB==="ficha" && FICHA_ID===pid) render();
+}
+function vOdontogramaSection(p){
+  const svgs = renderOdontograma(FICHA_ODONTO.estado, true);
+  const menor18 = p.birth ? (Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) < 13) : false;
+  if(menor18 && !ODONTO_DECID_VISIVEL){ ODONTO_DECID_VISIVEL = true; }
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">🦷 Odontograma</h2>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);cursor:pointer">
+        <input type="checkbox" ${ODONTO_DECID_VISIVEL?"checked":""} onchange="ODONTO_DECID_VISIVEL=this.checked;render()" style="width:auto">
+        Incluir dentição decídua
+      </label>
+    </div>
+    <p class="meta" style="margin-bottom:10px">Clique numa face do dente para cárie/restauração/fratura. Clique no número do dente para status estrutural (ausente, implante, coroa...).</p>
+    <div style="overflow-x:auto;padding:6px 0">${svgs.permanentes}</div>
+    ${ODONTO_DECID_VISIVEL?`<div style="overflow-x:auto;padding:6px 0;margin-top:6px;border-top:1px dashed var(--line)"><p class="meta" style="margin:8px 0 4px">Dentição decídua</p>${svgs.decid}</div>`:""}
+    ${odontoLegenda()}
+    ${FICHA_ODONTO.historico && FICHA_ODONTO.historico.length ? `
+    <details style="margin-top:12px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#475569">Histórico de marcações (${FICHA_ODONTO.historico.length})</summary>
+      <div style="margin-top:8px;max-height:220px;overflow-y:auto">
+        ${FICHA_ODONTO.historico.map(h=>`<div class="row" style="padding:7px 0">
+          <div style="min-width:44px;text-align:center"><b style="font-size:12px">${esc(h.dente)}</b></div>
+          <div class="grow"><div style="font-size:12.5px">${h.face==="dente"?(STATUS_DENTE_LABEL[h.status]||h.status):(FACE_LABEL[h.face]+" — "+(STATUS_FACE_LABEL[h.status]||h.status))}${h.observacao?" · "+esc(h.observacao):""}</div>
+          <div class="meta">${esc(h.profissionalNome)} · ${fmtDateTime(h.created_at)}</div></div>
+        </div>`).join("")}
+      </div>
+    </details>`:""}
+  </div>`;
+}
+function onOdontoFaceClick(dente, face){
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional primeiro."); return; }
+  modal(`Dente ${dente} — ${FACE_LABEL[face]}`,`
+    <label class="f"><span>Dentista responsável *</span><select id="of-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Status</span><select id="of-status">${Object.entries(STATUS_FACE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Observação</span><input id="of-obs" placeholder="Opcional"></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveMarcaOdonto('${dente}','${face}')">Registrar</button></div>`);
+}
+function onOdontoDenteClick(dente){
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional primeiro."); return; }
+  modal(`Dente ${dente} — status estrutural`,`
+    <label class="f"><span>Dentista responsável *</span><select id="of-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Status</span><select id="of-status">${Object.entries(STATUS_DENTE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Observação</span><input id="of-obs" placeholder="Opcional"></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="saveMarcaOdonto('${dente}','dente')">Registrar</button></div>`);
+}
+async function saveMarcaOdonto(dente, face){
+  const g=i=>document.getElementById(i)?.value;
+  const profissionalId = parseInt(g("of-prof"));
+  const status = g("of-status");
+  await api("POST","/odontograma",{patientId:FICHA_ID, profissionalId, dente, face, status, observacao:g("of-obs")||""});
+  closeModal();
+  await carregarOdontograma(FICHA_ID);
+  toast("Odontograma atualizado. 🦷");
+}
+
+/* ════════════════════════════════════════════
    FICHA DO PACIENTE (prontuário digital)
 ════════════════════════════════════════════ */
 async function openFicha(pid){
   FICHA_ID = pid;
   FICHA_EVOLUCOES = [];
   FICHA_ANEXOS = [];
+  FICHA_ODONTO = { estado:{}, historico:[] };
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
   const [ev, ax, ret] = await Promise.all([
@@ -1322,6 +1461,7 @@ async function openFicha(pid){
   FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses;
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   carregarFotoFicha(pid);
+  carregarOdontograma(pid);
   window.scrollTo(0,0);
 }
 async function carregarFotoFicha(pid){
@@ -1352,8 +1492,18 @@ const CLINIC_LOGO_B64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEA3ADcAAD/2wBD
 /* ════════════════════════════════════════════
    ANAMNESE — geração de ficha para impressão
 ════════════════════════════════════════════ */
-function gerarAnamnese(pid){
+async function gerarAnamnese(pid){
   const p = pById(pid); if(!p) return;
+  toast("Gerando ficha…");
+  let odontoHTML = `<div class="odonto-box">(sem marcações registradas ainda)</div>`;
+  try{
+    const od = await api("GET", `/odontograma?patient_id=${encodeURIComponent(pid)}`);
+    if(od && od.estado && Object.keys(od.estado).length){
+      const svgs = renderOdontograma(od.estado, false);
+      const temDecid = Object.keys(od.estado).some(d => parseInt(d) >= 51 && parseInt(d) <= 85);
+      odontoHTML = `<div style="margin-bottom:10px">${svgs.permanentes}${temDecid?svgs.decid:""}</div>${odontoLegenda()}`;
+    }
+  }catch(e){ /* segue sem odontograma se a chamada falhar */ }
   const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : "";
   const menor = idade !== "" && idade < 18;
   const linha = (v) => v ? esc(v) : "";
@@ -1457,7 +1607,7 @@ function gerarAnamnese(pid){
   <p style="font-size:11px;margin-bottom:2px">Intra-oral</p><div class="blank"></div>
 
   <h2>ODONTOGRAMA INICIAL — Registro de Anormalidades e Patologias</h2>
-  <div class="odonto-box">(odontograma interativo em desenvolvimento — registrar manualmente por enquanto)</div>
+  ${odontoHTML}
   <div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div><div class="blank"></div>
 
   <h2>DENTISTA RESPONSÁVEL</h2>
@@ -1592,6 +1742,8 @@ function vFicha(){
       <span class="meta">Imagens ou PDF, até 15 MB.</span>
     </div>
   </div>
+
+  ${vOdontogramaSection(p)}
 
   <div class="grid g2" style="gap:12px;align-items:start">
     <div class="card">
