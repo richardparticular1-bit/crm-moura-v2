@@ -254,3 +254,19 @@ class Despesa(Base):
     comprovanteMime: Mapped[str | None] = mapped_column(String(100), nullable=True)
     comprovantePath: Mapped[str | None] = mapped_column(String(300), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class OdontogramaMarca(Base):
+    """Odontograma: registro clínico IMUTÁVEL por dente/face (mesmo princípio das
+    evoluções — corrigir é registrar uma marcação nova, não editar a antiga).
+    face='dente' representa o dente inteiro (ausente, implante, coroa, canal...);
+    demais valores de face são áreas específicas (oclusal/vestibular/lingual/mesial/distal)."""
+    __tablename__ = "odontograma_marcas"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))
+    dente: Mapped[str] = mapped_column(String(3))   # "11".."48" (permanentes), "51".."85" (decíduos)
+    face: Mapped[str] = mapped_column(String(20))   # oclusal | vestibular | lingual | mesial | distal | dente
+    status: Mapped[str] = mapped_column(String(20))
+    observacao: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
