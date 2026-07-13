@@ -1333,6 +1333,8 @@ const DENTE_BADGE = {
 };
 const STATUS_DENTE_LABEL = { nenhum:"Nenhum (limpar)", ausente:"Ausente/Extraído", a_extrair:"A extrair", implante:"Implante", coroa:"Coroa", canal:"Tratamento de canal", protese:"Prótese" };
 
+const FACE_STATUS_SIGLA = { cariado:"C", restaurado:"R", fraturado:"Fx" };
+
 function _odontoToothSVG(numero, estadoDente, bloco, interactive){
   const T = 40, cell = T/3;
   const faces = (estadoDente && estadoDente.faces) || {};
@@ -1342,9 +1344,11 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
   const leftFace = bloco.mesial === "right" ? "distal" : "mesial";
   const rightFace = bloco.mesial === "right" ? "mesial" : "distal";
   const cellRect = (face, x, y) => {
-    const cor = faces[face] ? FACE_COR[faces[face]] : "#fff";
+    const st = faces[face];
+    const cor = st ? FACE_COR[st] : "#fff";
     const click = interactive ? `onclick="onOdontoFaceClick('${numero}','${face}')" style="cursor:pointer"` : "";
-    return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${faces[face]?" - "+STATUS_FACE_LABEL[faces[face]]:""}</title></rect>`;
+    const sigla = st ? `<text x="${x+cell/2}" y="${y+cell/2+2.6}" font-size="7.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="sans-serif" pointer-events="none">${FACE_STATUS_SIGLA[st]||""}</text>` : "";
+    return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${st?" - "+STATUS_FACE_LABEL[st]:""}</title></rect>${sigla}`;
   };
   let svg = `<svg width="${T}" height="${T+14}" viewBox="0 0 ${T} ${T+14}" style="overflow:visible">`;
   svg += cellRect(topFace, cell, 0);
@@ -1372,7 +1376,7 @@ function renderOdontograma(estado, interactive){
   return { permanentes, decid };
 }
 function odontoLegenda(){
-  const itens = [...Object.entries(FACE_COR).map(([k,c])=>({cor:c,nome:STATUS_FACE_LABEL[k]})), ...Object.values(DENTE_BADGE).map(b=>({cor:b.cor,nome:b.nome}))];
+  const itens = [...Object.entries(FACE_COR).map(([k,c])=>({cor:c,nome:`${STATUS_FACE_LABEL[k]} (${FACE_STATUS_SIGLA[k]})`})), ...Object.values(DENTE_BADGE).map(b=>({cor:b.cor,nome:`${b.nome} (${b.label})`}))];
   return `<div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px">` +
     itens.map(i=>`<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#64748b"><span style="width:11px;height:11px;border-radius:3px;background:${i.cor};display:inline-block"></span>${i.nome}</span>`).join("") + `</div>`;
 }
@@ -1413,30 +1417,35 @@ function vOdontogramaSection(p){
     </details>`:""}
   </div>`;
 }
-function onOdontoFaceClick(dente, face){
+function onOdontoFaceClick(dente, face){ _abrirModalOdonto(dente, face); }
+function onOdontoDenteClick(dente){ _abrirModalOdonto(dente, "dente"); }
+function _abrirModalOdonto(dente, faceClicada){
   const profs = DB.profissionais.filter(x=>x.ativo);
   if(profs.length===0){ toast("Cadastre um profissional primeiro."); return; }
-  modal(`Dente ${dente} — ${FACE_LABEL[face]}`,`
+  const tituloFace = faceClicada==="dente" ? "clique numa área específica" : FACE_LABEL[faceClicada];
+  modal(`Dente ${dente} — ${tituloFace}`,`
     <label class="f"><span>Dentista responsável *</span><select id="of-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
-    <label class="f"><span>Status</span><select id="of-status">${Object.entries(STATUS_FACE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Status</span><select id="of-status">
+      <optgroup label="Face específica (${faceClicada==="dente"?"Oclusal":FACE_LABEL[faceClicada]})">
+        ${Object.entries(STATUS_FACE_LABEL).map(([k,v])=>`<option value="${k}" data-tipo="face">${v}</option>`).join("")}
+      </optgroup>
+      <optgroup label="Dente inteiro">
+        ${Object.entries(STATUS_DENTE_LABEL).map(([k,v])=>`<option value="${k}" data-tipo="dente">${v}</option>`).join("")}
+      </optgroup>
+    </select></label>
     <label class="f"><span>Observação</span><input id="of-obs" placeholder="Opcional"></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="saveMarcaOdonto('${dente}','${face}')">Registrar</button></div>`);
+    <button class="btn" onclick="saveMarcaOdonto('${dente}','${faceClicada}')">Registrar</button></div>`);
 }
-function onOdontoDenteClick(dente){
-  const profs = DB.profissionais.filter(x=>x.ativo);
-  if(profs.length===0){ toast("Cadastre um profissional primeiro."); return; }
-  modal(`Dente ${dente} — status estrutural`,`
-    <label class="f"><span>Dentista responsável *</span><select id="of-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
-    <label class="f"><span>Status</span><select id="of-status">${Object.entries(STATUS_DENTE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
-    <label class="f"><span>Observação</span><input id="of-obs" placeholder="Opcional"></label>
-    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="saveMarcaOdonto('${dente}','dente')">Registrar</button></div>`);
-}
-async function saveMarcaOdonto(dente, face){
+async function saveMarcaOdonto(dente, faceClicada){
   const g=i=>document.getElementById(i)?.value;
   const profissionalId = parseInt(g("of-prof"));
-  const status = g("of-status");
+  const sel = document.getElementById("of-status");
+  const status = sel.value;
+  const tipo = sel.selectedOptions[0]?.dataset.tipo; // 'face' ou 'dente'
+  // Status "de dente inteiro" sempre grava em face='dente', não importa onde clicou;
+  // status "de face" grava na face clicada (ou 'oclusal' se a entrada foi pelo número).
+  const face = tipo === "dente" ? "dente" : (faceClicada === "dente" ? "oclusal" : faceClicada);
   await api("POST","/odontograma",{patientId:FICHA_ID, profissionalId, dente, face, status, observacao:g("of-obs")||""});
   closeModal();
   await carregarOdontograma(FICHA_ID);
@@ -1513,6 +1522,7 @@ async function gerarAnamnese(pid){
   <title>Anamnese - ${esc(p.name)}</title>
   <style>
     @page { size: A4; margin: 16mm 14mm; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     body{font-family:Georgia,'Times New Roman',serif;color:#111;font-size:12.5px;line-height:1.5}
     .hd{display:flex;align-items:center;gap:14px;border-bottom:2px solid #0f766e;padding-bottom:10px;margin-bottom:16px}
     .hd img{width:64px;height:64px;object-fit:contain}
@@ -1529,9 +1539,14 @@ async function gerarAnamnese(pid){
     .sig .line{border-top:1px solid #333;width:320px;margin:0 auto 4px}
     .odonto-box{border:1px solid #999;min-height:170px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;margin-bottom:10px}
     .noprint{margin-bottom:14px}
-    @media print{ .noprint{display:none} }
+    @media print{ .noprint{display:none} body{filter:grayscale(1)} }
+    body.force-gray{filter:grayscale(1)}
   </style></head><body>
-  <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button></div>
+  <div class="noprint" style="display:flex;gap:8px;align-items:center">
+    <button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
+    <button onclick="document.body.classList.toggle('force-gray')" style="padding:8px 16px;background:#fff;color:#334155;border:1px solid #ccc;border-radius:6px;font-size:14px;cursor:pointer">🖤 Pré-visualizar em P&B</button>
+    <span style="font-size:12px;color:#888">A impressão sempre sai em escala de cinza, mesmo em impressora colorida.</span>
+  </div>
 
   <div class="hd">
     <img src="${CLINIC_LOGO_B64}" alt="Logo">
