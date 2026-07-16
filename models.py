@@ -10,6 +10,7 @@ class Base(DeclarativeBase):
 
 class Profissional(Base):
     __tablename__ = "profissionais"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     nome: Mapped[str] = mapped_column(String(150))
     cro: Mapped[str] = mapped_column(String(30), default="")
@@ -23,6 +24,7 @@ class Profissional(Base):
 
 class Paciente(Base):
     __tablename__ = "patients"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     name: Mapped[str] = mapped_column(String(150))
     phone: Mapped[str] = mapped_column(String(30), default="")
@@ -61,6 +63,7 @@ class Paciente(Base):
 
 class Consulta(Base):
     __tablename__ = "appointments"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
@@ -77,6 +80,7 @@ class Consulta(Base):
 
 class Pesquisa(Base):
     __tablename__ = "surveys"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     appointmentId: Mapped[str] = mapped_column(String(20))
     patientId: Mapped[str] = mapped_column(String(20))
@@ -89,6 +93,7 @@ class Pesquisa(Base):
 
 class Tarefa(Base):
     __tablename__ = "tarefas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     titulo: Mapped[str] = mapped_column(String(200))
     descricao: Mapped[str] = mapped_column(Text, default="")
@@ -103,6 +108,7 @@ class Tarefa(Base):
 
 class MensagemChat(Base):
     __tablename__ = "chat_mensagens"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))
     canal: Mapped[str] = mapped_column(String(60), default="geral")
@@ -110,14 +116,27 @@ class MensagemChat(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class Clinica(Base):
+    """Tenant do sistema multi-clínica. Cada clínica enxerga apenas seus próprios dados."""
+    __tablename__ = "clinicas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    nome: Mapped[str] = mapped_column(String(150))
+    slug: Mapped[str] = mapped_column(String(60), default="")
+    plano: Mapped[str] = mapped_column(String(30), default="trial")
+    ativa: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class Config(Base):
     __tablename__ = "settings"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"), primary_key=True)
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
 
 
 class PushSubscription(Base):
     __tablename__ = "push_subscriptions"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     endpoint: Mapped[str] = mapped_column(Text, unique=True)
     p256dh: Mapped[str] = mapped_column(String(255))
@@ -131,6 +150,7 @@ class PushSubscription(Base):
 class NotificacaoEnviada(Base):
     """Registra que já notificamos uma consulta em determinado lead time, para não duplicar envios."""
     __tablename__ = "notificacoes_enviadas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     appointmentId: Mapped[str] = mapped_column(String(20))
     tipo: Mapped[str] = mapped_column(String(30))  # ex: "lembrete_60min", "lembrete_dia"
@@ -142,6 +162,7 @@ class Lancamento(Base):
     IMPORTANTE: valor é armazenado em CENTAVOS (inteiro) para evitar erros de
     arredondamento de ponto flutuante. R$ 150,00 => 15000."""
     __tablename__ = "lancamentos"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
@@ -162,6 +183,7 @@ class Evolucao(Base):
     Registro legal — não existe endpoint de edição nem exclusão.
     Erros são corrigidos com uma nova evolução de retificação."""
     __tablename__ = "evolucoes"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))  # autor legal, obrigatório
@@ -175,6 +197,7 @@ class Orcamento(Base):
     """Plano de tratamento orçado. Total = soma dos itens.
     Fluxo de status: rascunho -> apresentado -> aprovado | recusado."""
     __tablename__ = "orcamentos"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
@@ -187,6 +210,7 @@ class Orcamento(Base):
 
 class OrcamentoItem(Base):
     __tablename__ = "orcamento_itens"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     orcamentoId: Mapped[str] = mapped_column(String(20), ForeignKey("orcamentos.id"))
     procedimento: Mapped[str] = mapped_column(String(150))
@@ -198,12 +222,14 @@ class OrcamentoItem(Base):
 class Usuario(Base):
     """Usuário do sistema. Senha SEMPRE armazenada como hash bcrypt."""
     __tablename__ = "usuarios"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     nome: Mapped[str] = mapped_column(String(150))
     email: Mapped[str] = mapped_column(String(120), unique=True)
     senhaHash: Mapped[str] = mapped_column(String(100))
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    isSuperAdmin: Mapped[bool] = mapped_column(Boolean, default=False)  # acesso multi-clínica (plataforma)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
@@ -221,6 +247,7 @@ class Anexo(Base):
     consentimento assinado, foto). O binário vive no Supabase Storage
     (bucket privado); aqui fica só o metadado + caminho."""
     __tablename__ = "anexos"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     categoria: Mapped[str] = mapped_column(String(30), default="documento")  # radiografia | documento | consentimento | foto | outro
@@ -236,6 +263,7 @@ class RetornoConfig(Base):
     Tabela separada (em vez de coluna em patients) para nascer via create_all
     sem SQL manual no Supabase."""
     __tablename__ = "retorno_config"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     patientId: Mapped[str] = mapped_column(String(20), primary_key=True)
     meses: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sentAt: Mapped[str | None] = mapped_column(String(10), nullable=True)  # último convite de retorno enviado
@@ -245,6 +273,7 @@ class Despesa(Base):
     """Gasto do consultório (aluguel, material, laboratório, salário...).
     Comprovante opcional no Supabase Storage (mesma infra dos anexos)."""
     __tablename__ = "despesas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     categoria: Mapped[str] = mapped_column(String(30), default="outro")
     descricao: Mapped[str] = mapped_column(String(200), default="")
@@ -262,6 +291,7 @@ class OdontogramaMarca(Base):
     face='dente' representa o dente inteiro (ausente, implante, coroa, canal...);
     demais valores de face são áreas específicas (oclusal/vestibular/lingual/mesial/distal)."""
     __tablename__ = "odontograma_marcas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
     profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))
