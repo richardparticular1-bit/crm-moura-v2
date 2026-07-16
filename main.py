@@ -23,11 +23,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
+from sqlalchemy import event
+from sqlalchemy.orm import Session
 
 from database import SessionLocal, init_db
-from models import Anexo, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Clinica, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
-app = FastAPI(title="CRM Moura — Backend v2.6")
+app = FastAPI(title="CRM Moura — Backend v2.8 (multi-tenant: fundação)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,10 +47,39 @@ VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
 
 scheduler = BackgroundScheduler()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-TENANT — FUNDAÇÃO (Fase 1)
+# ══════════════════════════════════════════════════════════════════════════════
+# TEMPORÁRIO: enquanto os módulos (pacientes, agenda, financeiro...) ainda não
+# filtram explicitamente por clínica (isso é a Fase 2, módulo a módulo), este
+# listener carimba clinicaId automaticamente em QUALQUER registro novo que não
+# o tenha definido, usando a única clínica existente. Isso garante que nada
+# quebra hoje. Conforme cada módulo ganha isolamento de verdade na Fase 2, ele
+# passa a definir clinicaId explicitamente e este shim vira um no-op para ele.
+DEFAULT_CLINICA_ID: int | None = None
+
+
+@event.listens_for(Session, "before_flush")
+def _auto_carimba_clinica(session, flush_context, instances):
+    if DEFAULT_CLINICA_ID is None:
+        return
+    for obj in session.new:
+        if hasattr(obj, "clinicaId") and getattr(obj, "clinicaId", None) is None:
+            obj.clinicaId = DEFAULT_CLINICA_ID
+
+
+def _carregar_clinica_padrao():
+    """Roda no startup: descobre a clínica existente para o shim acima."""
+    global DEFAULT_CLINICA_ID
+    with SessionLocal() as db:
+        c = db.query(Clinica).order_by(Clinica.id).first()
+        DEFAULT_CLINICA_ID = c.id if c else None
+
 
 @app.on_event("startup")
 def startup():
     init_db()
+    _carregar_clinica_padrao()
     if not scheduler.running:
         scheduler.add_job(checar_consultas_proximas, "interval", minutes=5, id="check_appts", replace_existing=True)
         scheduler.add_job(backup_automatico, "cron", hour=6, minute=0, id="backup_diario", replace_existing=True)  # 06:00 UTC = 03:00 BRT
@@ -129,6 +160,7 @@ class SetupIn(BaseModel):
     nome: str
     email: str
     senha: str
+    clinicaNome: str = ""  # nome da clínica; se vazio, usa um padrão
 
 
 class LoginIn(BaseModel):
@@ -154,13 +186,22 @@ def auth_status():
 
 @app.post("/api/auth/setup", status_code=201)
 def auth_setup(data: SetupIn):
-    """Cria o PRIMEIRO usuário. Só funciona enquanto não existe nenhum."""
+    """Cria a PRIMEIRA clínica e o PRIMEIRO usuário (superadmin da plataforma).
+    Só funciona enquanto não existe nenhum usuário no sistema."""
     if len(data.senha) < 8:
         raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
     with SessionLocal() as db:
         if db.query(Usuario).count() > 0:
             raise HTTPException(403, "O sistema já foi configurado. Faça login.")
-        u = Usuario(nome=data.nome.strip(), email=data.email.strip().lower(), senhaHash=_hash_senha(data.senha), ativo=True)
+        clinica = Clinica(nome=(data.clinicaNome.strip() or "Minha Clínica"), plano="ativo", ativa=True)
+        db.add(clinica)
+        db.flush()  # garante clinica.id antes de criar o usuário
+        global DEFAULT_CLINICA_ID
+        DEFAULT_CLINICA_ID = clinica.id  # ambientes novos: a clínica só passa a existir agora
+        u = Usuario(
+            clinicaId=clinica.id, nome=data.nome.strip(), email=data.email.strip().lower(),
+            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=True,
+        )
         db.add(u)
         db.commit()
         db.refresh(u)
@@ -218,10 +259,21 @@ def auth_me(request: Request):
         u = _usuario_do_token(db, token)
         if not u:
             raise HTTPException(401, "Não autenticado.")
-        return {"id": u.id, "nome": u.nome, "email": u.email}
+        return {"id": u.id, "nome": u.nome, "email": u.email, "clinicaId": u.clinicaId, "isSuperAdmin": u.isSuperAdmin}
 
 
-# ── gestão de usuários (qualquer usuário logado; equipe pequena) ───────────────
+# ── gestão de usuários (escopada por clínica; qualquer usuário logado, equipe pequena) ──
+def _usuario_logado(request: Request) -> Usuario:
+    auth = request.headers.get("authorization", "")
+    token = auth[7:] if auth.lower().startswith("bearer ") else ""
+    with SessionLocal() as db:
+        u = _usuario_do_token(db, token)
+        if not u:
+            raise HTTPException(401, "Não autenticado.")
+        db.expunge(u)
+        return u
+
+
 class UsuarioIn(BaseModel):
     nome: str
     email: str
@@ -230,35 +282,44 @@ class UsuarioIn(BaseModel):
 
 
 @app.get("/api/usuarios")
-def list_usuarios():
+def list_usuarios(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
+        q = db.query(Usuario)
+        if not quem.isSuperAdmin:
+            q = q.filter(Usuario.clinicaId == quem.clinicaId)
         return [
             {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
-            for u in db.query(Usuario).order_by(Usuario.nome).all()
+            for u in q.order_by(Usuario.nome).all()
         ]
 
 
 @app.post("/api/usuarios", status_code=201)
-def create_usuario(data: UsuarioIn):
+def create_usuario(data: UsuarioIn, request: Request):
+    quem = _usuario_logado(request)
     if not data.senha or len(data.senha) < 8:
         raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
     with SessionLocal() as db:
         if db.query(Usuario).filter(Usuario.email == data.email.strip().lower()).first():
             raise HTTPException(409, "Já existe um usuário com este e-mail.")
-        u = Usuario(nome=data.nome.strip(), email=data.email.strip().lower(), senhaHash=_hash_senha(data.senha), ativo=data.ativo)
+        # clinicaId nunca vem do cliente — sempre herda de quem está criando, evitando
+        # que alguém se atribua (ou atribua outra pessoa) a uma clínica que não é a sua.
+        u = Usuario(clinicaId=quem.clinicaId, nome=data.nome.strip(), email=data.email.strip().lower(),
+                    senhaHash=_hash_senha(data.senha), ativo=data.ativo)
         db.add(u)
         db.commit()
         return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
 
 
 @app.put("/api/usuarios/{uid}")
-def update_usuario(uid: int, data: UsuarioIn):
+def update_usuario(uid: int, data: UsuarioIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         u = db.get(Usuario, uid)
-        if not u:
+        if not u or (not quem.isSuperAdmin and u.clinicaId != quem.clinicaId):
             raise HTTPException(404, "Usuário não encontrado")
         if not data.ativo and u.ativo:
-            ativos = db.query(Usuario).filter(Usuario.ativo == True).count()  # noqa: E712
+            ativos = db.query(Usuario).filter(Usuario.ativo == True, Usuario.clinicaId == u.clinicaId).count()  # noqa: E712
             if ativos <= 1:
                 raise HTTPException(409, "Não é possível desativar o último usuário ativo.")
         novo_email = data.email.strip().lower()
@@ -800,11 +861,11 @@ def get_settings():
 def save_settings(data: dict[str, str]):
     with SessionLocal() as db:
         for k, v in data.items():
-            cfg = db.get(Config, k)
+            cfg = db.get(Config, (DEFAULT_CLINICA_ID, k))
             if cfg:
                 cfg.value = v
             else:
-                db.add(Config(key=k, value=v))
+                db.add(Config(clinicaId=DEFAULT_CLINICA_ID, key=k, value=v))
         db.commit()
         return {"ok": True}
 
@@ -904,10 +965,10 @@ def checar_consultas_proximas():
     """Job do scheduler: roda a cada 5 minutos, verifica consultas que vão começar
     dentro do prazo configurado (notifLembreteMinutos) e dispara push, evitando duplicar."""
     with SessionLocal() as db:
-        ativas = db.get(Config, "notifAtivas")
+        ativas = db.get(Config, (DEFAULT_CLINICA_ID, "notifAtivas"))
         if ativas and ativas.value == "false":
             return
-        lembrete_cfg = db.get(Config, "notifLembreteMinutos")
+        lembrete_cfg = db.get(Config, (DEFAULT_CLINICA_ID, "notifLembreteMinutos"))
         lembrete_min = int(lembrete_cfg.value) if lembrete_cfg and lembrete_cfg.value.isdigit() else 60
 
         agora = datetime.now()
@@ -1580,7 +1641,7 @@ def list_retornos():
     sem consulta futura marcada."""
     from datetime import date
     with SessionLocal() as db:
-        padrao_cfg = db.get(Config, "retornoMesesPadrao")
+        padrao_cfg = db.get(Config, (DEFAULT_CLINICA_ID, "retornoMesesPadrao"))
         padrao = int(padrao_cfg.value) if padrao_cfg and padrao_cfg.value.isdigit() else 6
         hoje = date.today().isoformat()
         janela = (date.today() + timedelta(days=30)).isoformat()
@@ -1874,10 +1935,10 @@ def import_dump(data: DumpIn):
             if not db.get(Lancamento, l["id"]):
                 db.add(Lancamento(**{k: v for k, v in l.items() if hasattr(Lancamento, k)}))
         for k, v in data.settings.items():
-            cfg = db.get(Config, k)
+            cfg = db.get(Config, (DEFAULT_CLINICA_ID, k))
             if cfg:
                 cfg.value = str(v)
             else:
-                db.add(Config(key=k, value=str(v)))
+                db.add(Config(clinicaId=DEFAULT_CLINICA_ID, key=k, value=str(v)))
         db.commit()
     return {"ok": True, "patients": len(data.patients), "appointments": len(data.appointments)}
