@@ -4,12 +4,9 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base
-
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
-
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
 if DATABASE_URL:
     engine = create_engine(DATABASE_URL)
 else:
@@ -18,9 +15,7 @@ else:
     else:
         DB_PATH = Path(__file__).parent / "crm.db"
     engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
-
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
 DEFAULT_SETTINGS = {
     "googleReviewLink": "https://g.page/r/SEU_LINK_AQUI/review",
     "inactivityMonths": "6",
@@ -32,12 +27,17 @@ DEFAULT_SETTINGS = {
     "notifLembreteMinutos": "60",
     "notifAtivas": "true",
 }
-
 def init_db():
     Base.metadata.create_all(bind=engine)
-    from models import Config
+    # Multi-tenant: settings agora tem chave composta (clinicaId, key).
+    # Semeia os padrões para cada clínica existente que ainda não os tenha.
+    # Se ainda não existe nenhuma clínica (sistema virgem, antes do setup),
+    # simplesmente pula — o setup criará a clínica e o próximo boot semeia.
+    from models import Clinica, Config
     with SessionLocal() as db:
-        for k, v in DEFAULT_SETTINGS.items():
-            if not db.get(Config, k):
-                db.add(Config(key=k, value=v))
+        clinicas = db.query(Clinica.id).all()
+        for (cid,) in clinicas:
+            for k, v in DEFAULT_SETTINGS.items():
+                if not db.get(Config, (cid, k)):
+                    db.add(Config(clinicaId=cid, key=k, value=v))
         db.commit()
