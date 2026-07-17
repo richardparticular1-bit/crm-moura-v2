@@ -676,17 +676,22 @@ class PesquisaIn(BaseModel):
 
 
 @app.get("/api/surveys")
-def list_surveys():
+def list_surveys(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        return [_row(s) for s in db.query(Pesquisa).all()]
+        return [_row(s) for s in db.query(Pesquisa).filter(Pesquisa.clinicaId == quem.clinicaId).all()]
 
 
 @app.post("/api/surveys", status_code=201)
-def create_survey(data: PesquisaIn):
+def create_survey(data: PesquisaIn, request: Request):
+    quem = _usuario_logado(request)
     sid = data.id or _new_id()
     with SessionLocal() as db:
-        db.query(Pesquisa).filter(Pesquisa.appointmentId == data.appointmentId).delete()
-        s = Pesquisa(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=sid)
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
+        db.query(Pesquisa).filter(Pesquisa.appointmentId == data.appointmentId, Pesquisa.clinicaId == quem.clinicaId).delete()
+        s = Pesquisa(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=sid, clinicaId=quem.clinicaId)
         db.add(s)
         db.commit()
         db.refresh(s)
@@ -694,10 +699,11 @@ def create_survey(data: PesquisaIn):
 
 
 @app.put("/api/surveys/{sid}")
-def update_survey(sid: str, data: PesquisaIn):
+def update_survey(sid: str, data: PesquisaIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         s = db.get(Pesquisa, sid)
-        if not s:
+        if not s or s.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         for k, v in data.model_dump(exclude={"id"}).items():
             setattr(s, k, v)
@@ -720,9 +726,10 @@ class TarefaIn(BaseModel):
 
 
 @app.get("/api/tarefas")
-def list_tarefas(status: str | None = None):
+def list_tarefas(request: Request, status: str | None = None):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        q = db.query(Tarefa)
+        q = db.query(Tarefa).filter(Tarefa.clinicaId == quem.clinicaId)
         if status:
             q = q.filter(Tarefa.status == status)
         rows = q.order_by(Tarefa.dataVencimento.asc().nullslast(), Tarefa.id.asc()).all()
@@ -745,9 +752,14 @@ def list_tarefas(status: str | None = None):
 
 
 @app.post("/api/tarefas", status_code=201)
-def create_tarefa(data: TarefaIn):
+def create_tarefa(data: TarefaIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        t = Tarefa(**data.model_dump())
+        if data.patientId:
+            pac = db.get(Paciente, data.patientId)
+            if not pac or pac.clinicaId != quem.clinicaId:
+                raise HTTPException(404, "Paciente não encontrado")
+        t = Tarefa(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(t)
         db.commit()
         db.refresh(t)
@@ -755,10 +767,11 @@ def create_tarefa(data: TarefaIn):
 
 
 @app.put("/api/tarefas/{tid}")
-def update_tarefa(tid: int, data: TarefaIn):
+def update_tarefa(tid: int, data: TarefaIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         t = db.get(Tarefa, tid)
-        if not t:
+        if not t or t.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Tarefa não encontrada")
         for k, v in data.model_dump().items():
             setattr(t, k, v)
@@ -768,10 +781,11 @@ def update_tarefa(tid: int, data: TarefaIn):
 
 
 @app.delete("/api/tarefas/{tid}", status_code=204)
-def delete_tarefa(tid: int):
+def delete_tarefa(tid: int, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         t = db.get(Tarefa, tid)
-        if not t:
+        if not t or t.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.delete(t)
         db.commit()
@@ -787,11 +801,12 @@ class MensagemIn(BaseModel):
 
 
 @app.get("/api/chat")
-def list_mensagens(canal: str = "geral", limit: int = 100):
+def list_mensagens(request: Request, canal: str = "geral", limit: int = 100):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         rows = (
             db.query(MensagemChat)
-            .filter(MensagemChat.canal == canal)
+            .filter(MensagemChat.canal == canal, MensagemChat.clinicaId == quem.clinicaId)
             .order_by(MensagemChat.created_at.desc())
             .limit(limit)
             .all()
@@ -808,9 +823,10 @@ def list_mensagens(canal: str = "geral", limit: int = 100):
 
 
 @app.post("/api/chat", status_code=201)
-def send_mensagem(data: MensagemIn):
+def send_mensagem(data: MensagemIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        m = MensagemChat(**data.model_dump())
+        m = MensagemChat(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(m)
         db.commit()
         db.refresh(m)
@@ -823,10 +839,11 @@ def send_mensagem(data: MensagemIn):
 
 
 @app.get("/api/chat/canais")
-def list_canais():
-    """Retorna canais únicos existentes + 'geral' sempre presente."""
+def list_canais(request: Request):
+    """Retorna canais únicos existentes na clínica + 'geral' sempre presente."""
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        rows = db.query(MensagemChat.canal).distinct().all()
+        rows = db.query(MensagemChat.canal).filter(MensagemChat.clinicaId == quem.clinicaId).distinct().all()
         canais = list({r[0] for r in rows} | {"geral"})
         return sorted(canais)
 
@@ -835,12 +852,13 @@ def list_canais():
 # ANIVERSARIANTES DO DIA
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/aniversariantes")
-def aniversariantes_hoje():
-    """Retorna pacientes que fazem aniversário hoje (MM-DD)."""
+def aniversariantes_hoje(request: Request):
+    """Retorna pacientes que fazem aniversário hoje (MM-DD), da clínica do usuário logado."""
+    quem = _usuario_logado(request)
     from datetime import date
     hoje = date.today().strftime("%m-%d")
     with SessionLocal() as db:
-        pacientes = db.query(Paciente).filter(Paciente.birth.isnot(None)).all()
+        pacientes = db.query(Paciente).filter(Paciente.birth.isnot(None), Paciente.clinicaId == quem.clinicaId).all()
         result = []
         for p in pacientes:
             if p.birth and len(p.birth) == 10:
@@ -906,10 +924,13 @@ def get_vapid_public_key():
 
 
 @app.post("/api/push/subscribe", status_code=201)
-def push_subscribe(data: PushSubIn):
+def push_subscribe(data: PushSubIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         existing = db.query(PushSubscription).filter(PushSubscription.endpoint == data.endpoint).first()
         if existing:
+            if existing.clinicaId != quem.clinicaId:
+                raise HTTPException(409, "Este dispositivo já está inscrito em outra clínica.")
             existing.p256dh = data.keys.get("p256dh", "")
             existing.auth = data.keys.get("auth", "")
             existing.profissionalId = data.profissionalId
@@ -918,6 +939,7 @@ def push_subscribe(data: PushSubIn):
             db.commit()
             return {"ok": True, "updated": True}
         sub = PushSubscription(
+            clinicaId=quem.clinicaId,
             endpoint=data.endpoint,
             p256dh=data.keys.get("p256dh", ""),
             auth=data.keys.get("auth", ""),
@@ -935,9 +957,12 @@ class PushUnsubIn(BaseModel):
 
 
 @app.post("/api/push/unsubscribe")
-def push_unsubscribe(data: PushUnsubIn):
+def push_unsubscribe(data: PushUnsubIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        db.query(PushSubscription).filter(PushSubscription.endpoint == data.endpoint).delete()
+        db.query(PushSubscription).filter(
+            PushSubscription.endpoint == data.endpoint, PushSubscription.clinicaId == quem.clinicaId
+        ).delete()
         db.commit()
         return {"ok": True}
 
@@ -968,9 +993,10 @@ class PushTestIn(BaseModel):
 
 
 @app.post("/api/push/test")
-def push_test(data: PushTestIn):
+def push_test(data: PushTestIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        q = db.query(PushSubscription).filter(PushSubscription.ativo == True)  # noqa: E712
+        q = db.query(PushSubscription).filter(PushSubscription.ativo == True, PushSubscription.clinicaId == quem.clinicaId)  # noqa: E712
         if data.profissionalId:
             q = q.filter(PushSubscription.profissionalId == data.profissionalId)
         subs = q.all()
@@ -983,54 +1009,60 @@ def push_test(data: PushTestIn):
 
 def checar_consultas_proximas():
     """Job do scheduler: roda a cada 5 minutos, verifica consultas que vão começar
-    dentro do prazo configurado (notifLembreteMinutos) e dispara push, evitando duplicar."""
+    dentro do prazo configurado (notifLembreteMinutos) e dispara push, evitando duplicar.
+    Processa CADA CLÍNICA separadamente — settings, consultas e inscrições push
+    nunca se misturam entre clínicas."""
     with SessionLocal() as db:
-        ativas = db.get(Config, (DEFAULT_CLINICA_ID, "notifAtivas"))
-        if ativas and ativas.value == "false":
-            return
-        lembrete_cfg = db.get(Config, (DEFAULT_CLINICA_ID, "notifLembreteMinutos"))
-        lembrete_min = int(lembrete_cfg.value) if lembrete_cfg and lembrete_cfg.value.isdigit() else 60
-
-        agora = datetime.now()
-        janela_fim = agora + timedelta(minutes=lembrete_min)
-        janela_inicio = agora + timedelta(minutes=max(0, lembrete_min - 5))
-
-        candidatas = db.query(Consulta).filter(Consulta.status.in_(["agendado", "confirmado"])).all()
-        for a in candidatas:
-            try:
-                dt = datetime.strptime(f"{a.date} {a.time}", "%Y-%m-%d %H:%M")
-            except ValueError:
+        clinica_ids = [c.id for c in db.query(Clinica.id).filter(Clinica.ativa == True).all()]  # noqa: E712
+        for cid in clinica_ids:
+            ativas = db.get(Config, (cid, "notifAtivas"))
+            if ativas and ativas.value == "false":
                 continue
-            if not (janela_inicio <= dt <= janela_fim):
-                continue
-            ja_enviado = (
-                db.query(NotificacaoEnviada)
-                .filter(NotificacaoEnviada.appointmentId == a.id, NotificacaoEnviada.tipo == "lembrete")
-                .first()
-            )
-            if ja_enviado:
-                continue
-            paciente = db.get(Paciente, a.patientId)
-            nome_pac = paciente.name if paciente else "Paciente"
-            prof = db.get(Profissional, a.profissionalId) if a.profissionalId else None
+            lembrete_cfg = db.get(Config, (cid, "notifLembreteMinutos"))
+            lembrete_min = int(lembrete_cfg.value) if lembrete_cfg and lembrete_cfg.value.isdigit() else 60
 
-            subs_q = db.query(PushSubscription).filter(PushSubscription.ativo == True)  # noqa: E712
-            if a.profissionalId:
-                subs_q = subs_q.filter(
-                    (PushSubscription.profissionalId == a.profissionalId) | (PushSubscription.profissionalId.is_(None))
+            agora = datetime.now()
+            janela_fim = agora + timedelta(minutes=lembrete_min)
+            janela_inicio = agora + timedelta(minutes=max(0, lembrete_min - 5))
+
+            candidatas = db.query(Consulta).filter(
+                Consulta.status.in_(["agendado", "confirmado"]), Consulta.clinicaId == cid
+            ).all()
+            for a in candidatas:
+                try:
+                    dt = datetime.strptime(f"{a.date} {a.time}", "%Y-%m-%d %H:%M")
+                except ValueError:
+                    continue
+                if not (janela_inicio <= dt <= janela_fim):
+                    continue
+                ja_enviado = (
+                    db.query(NotificacaoEnviada)
+                    .filter(NotificacaoEnviada.appointmentId == a.id, NotificacaoEnviada.tipo == "lembrete")
+                    .first()
                 )
-            subs = subs_q.all()
+                if ja_enviado:
+                    continue
+                paciente = db.get(Paciente, a.patientId)
+                nome_pac = paciente.name if paciente else "Paciente"
+                prof = db.get(Profissional, a.profissionalId) if a.profissionalId else None
 
-            titulo = f"Consulta em {lembrete_min} min"
-            corpo = f"{nome_pac} às {a.time}" + (f" — {a.procedure}" if a.procedure else "")
-            if prof:
-                corpo += f" · {prof.nome}"
+                subs_q = db.query(PushSubscription).filter(PushSubscription.ativo == True, PushSubscription.clinicaId == cid)  # noqa: E712
+                if a.profissionalId:
+                    subs_q = subs_q.filter(
+                        (PushSubscription.profissionalId == a.profissionalId) | (PushSubscription.profissionalId.is_(None))
+                    )
+                subs = subs_q.all()
 
-            for s in subs:
-                _enviar_push(s, titulo, corpo, "/", db)
+                titulo = f"Consulta em {lembrete_min} min"
+                corpo = f"{nome_pac} às {a.time}" + (f" — {a.procedure}" if a.procedure else "")
+                if prof:
+                    corpo += f" · {prof.nome}"
 
-            db.add(NotificacaoEnviada(appointmentId=a.id, tipo="lembrete"))
-            db.commit()
+                for s in subs:
+                    _enviar_push(s, titulo, corpo, "/", db)
+
+                db.add(NotificacaoEnviada(appointmentId=a.id, tipo="lembrete", clinicaId=cid))
+                db.commit()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
