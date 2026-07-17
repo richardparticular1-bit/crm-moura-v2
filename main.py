@@ -357,10 +357,10 @@ def _minutos(hhmm: str) -> int | None:
         return None
 
 
-def _consulta_conflitante(db, data: "ConsultaIn", exclude_id: str | None = None) -> Consulta | None:
+def _consulta_conflitante(db, data: "ConsultaIn", clinica_id: int, exclude_id: str | None = None) -> Consulta | None:
     """Verifica se já existe consulta do MESMO profissional, na MESMA data,
-    com horário sobreposto. Retorna a consulta conflitante ou None.
-    Consultas canceladas não contam como conflito."""
+    com horário sobreposto, DENTRO DA MESMA CLÍNICA. Retorna a consulta
+    conflitante ou None. Consultas canceladas não contam como conflito."""
     if not data.profissionalId:
         return None
     inicio_novo = _minutos(data.time)
@@ -372,6 +372,7 @@ def _consulta_conflitante(db, data: "ConsultaIn", exclude_id: str | None = None)
         Consulta.profissionalId == data.profissionalId,
         Consulta.date == data.date,
         Consulta.status != "cancelado",
+        Consulta.clinicaId == clinica_id,
     )
     if exclude_id:
         q = q.filter(Consulta.id != exclude_id)
@@ -536,16 +537,17 @@ class ConsultaIn(BaseModel):
 
 # IMPORTANTE: esta rota fica ANTES de qualquer rota /api/appointments/{aid}
 @app.get("/api/appointments/search")
-def search_appointments(q: str, limit: int = 50):
+def search_appointments(q: str, request: Request, limit: int = 50):
     """Busca agendamentos pelo nome do paciente (parcial, sem case).
     Retorna ordenado por data/hora, com nome do paciente e do profissional."""
+    quem = _usuario_logado(request)
     termo = (q or "").strip()
     if len(termo) < 2:
         return []
     with SessionLocal() as db:
         pacientes = (
             db.query(Paciente)
-            .filter(Paciente.name.ilike(f"%{termo}%"))
+            .filter(Paciente.name.ilike(f"%{termo}%"), Paciente.clinicaId == quem.clinicaId)
             .all()
         )
         if not pacientes:
@@ -553,7 +555,7 @@ def search_appointments(q: str, limit: int = 50):
         por_id = {p.id: p for p in pacientes}
         rows = (
             db.query(Consulta)
-            .filter(Consulta.patientId.in_(list(por_id.keys())))
+            .filter(Consulta.patientId.in_(list(por_id.keys())), Consulta.clinicaId == quem.clinicaId)
             .order_by(Consulta.date.desc(), Consulta.time.desc())
             .limit(limit)
             .all()
@@ -576,9 +578,10 @@ def search_appointments(q: str, limit: int = 50):
 
 
 @app.get("/api/appointments")
-def list_appointments(date: str | None = None):
+def list_appointments(request: Request, date: str | None = None):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        q = db.query(Consulta)
+        q = db.query(Consulta).filter(Consulta.clinicaId == quem.clinicaId)
         if date:
             q = q.filter(Consulta.date == date)
         rows = q.order_by(Consulta.date, Consulta.time).all()
@@ -598,19 +601,23 @@ def list_appointments(date: str | None = None):
 
 
 @app.post("/api/appointments", status_code=201)
-def create_appointment(data: ConsultaIn):
+def create_appointment(data: ConsultaIn, request: Request):
+    quem = _usuario_logado(request)
     aid = data.id or _new_id()
     with SessionLocal() as db:
-        conflito = _consulta_conflitante(db, data)
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
+        conflito = _consulta_conflitante(db, data, quem.clinicaId)
         if conflito:
-            pac = db.get(Paciente, conflito.patientId)
-            nome = pac.name if pac else "outro paciente"
+            pac2 = db.get(Paciente, conflito.patientId)
+            nome = pac2.name if pac2 else "outro paciente"
             raise HTTPException(
                 409,
                 f"Conflito de horário: {nome} já está agendado às {conflito.time} "
                 f"({conflito.duracaoMinutos or 60} min) com este profissional.",
             )
-        a = Consulta(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=aid)
+        a = Consulta(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=aid, clinicaId=quem.clinicaId)
         db.add(a)
         db.commit()
         db.refresh(a)
@@ -618,12 +625,13 @@ def create_appointment(data: ConsultaIn):
 
 
 @app.put("/api/appointments/{aid}")
-def update_appointment(aid: str, data: ConsultaIn):
+def update_appointment(aid: str, data: ConsultaIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(Consulta, aid)
-        if not a:
+        if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404)
-        conflito = _consulta_conflitante(db, data, exclude_id=aid)
+        conflito = _consulta_conflitante(db, data, quem.clinicaId, exclude_id=aid)
         if conflito:
             pac = db.get(Paciente, conflito.patientId)
             nome = pac.name if pac else "outro paciente"
@@ -640,10 +648,11 @@ def update_appointment(aid: str, data: ConsultaIn):
 
 
 @app.delete("/api/appointments/{aid}", status_code=204)
-def delete_appointment(aid: str):
+def delete_appointment(aid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(Consulta, aid)
-        if not a:
+        if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.delete(a)
         db.commit()
