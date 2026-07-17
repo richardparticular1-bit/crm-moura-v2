@@ -1655,18 +1655,26 @@ class RetornoIn(BaseModel):
 
 
 @app.get("/api/retorno/{pid}")
-def get_retorno(pid: str):
+def get_retorno(pid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         cfg = db.get(RetornoConfig, pid)
         return {"meses": cfg.meses if cfg else None}
 
 
 @app.put("/api/retorno/{pid}")
-def set_retorno(pid: str, data: RetornoIn):
+def set_retorno(pid: str, data: RetornoIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         cfg = db.get(RetornoConfig, pid)
         if not cfg:
-            cfg = RetornoConfig(patientId=pid)
+            cfg = RetornoConfig(patientId=pid, clinicaId=quem.clinicaId)
             db.add(cfg)
         cfg.meses = data.meses if (data.meses and data.meses > 0) else None
         db.commit()
@@ -1674,12 +1682,16 @@ def set_retorno(pid: str, data: RetornoIn):
 
 
 @app.post("/api/retorno/{pid}/enviado")
-def retorno_enviado(pid: str):
+def retorno_enviado(pid: str, request: Request):
+    quem = _usuario_logado(request)
     from datetime import date
     with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         cfg = db.get(RetornoConfig, pid)
         if not cfg:
-            cfg = RetornoConfig(patientId=pid)
+            cfg = RetornoConfig(patientId=pid, clinicaId=quem.clinicaId)
             db.add(cfg)
         cfg.sentAt = date.today().isoformat()
         db.commit()
@@ -1687,22 +1699,28 @@ def retorno_enviado(pid: str):
 
 
 @app.get("/api/retornos")
-def list_retornos():
+def list_retornos(request: Request):
     """Fila de recall: pacientes cujo retorno vence nos próximos 30 dias ou já venceu,
-    sem consulta futura marcada."""
+    sem consulta futura marcada. Escopado à clínica do usuário logado."""
+    quem = _usuario_logado(request)
     from datetime import date
     with SessionLocal() as db:
-        padrao_cfg = db.get(Config, (DEFAULT_CLINICA_ID, "retornoMesesPadrao"))
+        padrao_cfg = db.get(Config, (quem.clinicaId, "retornoMesesPadrao"))
         padrao = int(padrao_cfg.value) if padrao_cfg and padrao_cfg.value.isdigit() else 6
         hoje = date.today().isoformat()
         janela = (date.today() + timedelta(days=30)).isoformat()
         futuros = {
             a.patientId
-            for a in db.query(Consulta).filter(Consulta.date >= hoje, Consulta.status.in_(["agendado", "confirmado"])).all()
+            for a in db.query(Consulta).filter(
+                Consulta.date >= hoje, Consulta.status.in_(["agendado", "confirmado"]),
+                Consulta.clinicaId == quem.clinicaId,
+            ).all()
         }
-        configs = {c.patientId: c for c in db.query(RetornoConfig).all()}
+        configs = {
+            c.patientId: c for c in db.query(RetornoConfig).filter(RetornoConfig.clinicaId == quem.clinicaId).all()
+        }
         out = []
-        for p in db.query(Paciente).filter(Paciente.lastVisit.isnot(None)).all():
+        for p in db.query(Paciente).filter(Paciente.lastVisit.isnot(None), Paciente.clinicaId == quem.clinicaId).all():
             if p.id in futuros or not p.lastVisit:
                 continue
             cfg = configs.get(p.id)
