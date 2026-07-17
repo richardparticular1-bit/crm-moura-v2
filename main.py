@@ -1732,18 +1732,23 @@ def _lanc_row(db, l: Lancamento) -> dict[str, Any]:
 
 
 @app.get("/api/financeiro")
-def list_lancamentos():
+def list_lancamentos(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        rows = db.query(Lancamento).order_by(Lancamento.vencimento.desc()).all()
+        rows = db.query(Lancamento).filter(Lancamento.clinicaId == quem.clinicaId).order_by(Lancamento.vencimento.desc()).all()
         return [_lanc_row(db, l) for l in rows]
 
 
 @app.post("/api/financeiro", status_code=201)
-def create_lancamento(data: LancamentoIn):
+def create_lancamento(data: LancamentoIn, request: Request):
+    quem = _usuario_logado(request)
     if data.valor <= 0:
         raise HTTPException(422, "Informe um valor maior que zero.")
     n = max(1, min(24, data.parcelas))
     with SessionLocal() as db:
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         criados = []
         base = data.valor // n
         resto = data.valor - base * n  # primeira parcela absorve o resto da divisão
@@ -1754,6 +1759,7 @@ def create_lancamento(data: LancamentoIn):
                 desc = f"{data.descricao} ({i+1}/{n})"
             l = Lancamento(
                 id=_new_id(),
+                clinicaId=quem.clinicaId,
                 patientId=data.patientId,
                 profissionalId=data.profissionalId,
                 appointmentId=data.appointmentId,
@@ -1772,10 +1778,11 @@ def create_lancamento(data: LancamentoIn):
 
 
 @app.put("/api/financeiro/{lid}")
-def update_lancamento(lid: str, data: LancamentoIn):
+def update_lancamento(lid: str, data: LancamentoIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         l = db.get(Lancamento, lid)
-        if not l:
+        if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Lançamento não encontrado")
         for k, v in data.model_dump(exclude={"id", "parcelas"}).items():
             setattr(l, k, v)
@@ -1792,11 +1799,12 @@ class ReceberIn(BaseModel):
 
 
 @app.put("/api/financeiro/{lid}/receber")
-def receber_lancamento(lid: str, data: ReceberIn):
+def receber_lancamento(lid: str, data: ReceberIn, request: Request):
+    quem = _usuario_logado(request)
     from datetime import date
     with SessionLocal() as db:
         l = db.get(Lancamento, lid)
-        if not l:
+        if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Lançamento não encontrado")
         if l.pagoEm:
             raise HTTPException(409, "Este lançamento já está pago.")
@@ -1808,7 +1816,7 @@ def receber_lancamento(lid: str, data: ReceberIn):
             if not data.restanteVencimento:
                 raise HTTPException(422, "Informe o novo vencimento do valor restante.")
             restante = Lancamento(
-                id=_new_id(), patientId=l.patientId, profissionalId=l.profissionalId,
+                id=_new_id(), clinicaId=quem.clinicaId, patientId=l.patientId, profissionalId=l.profissionalId,
                 appointmentId=l.appointmentId,
                 descricao=(l.descricao or "Cobrança") + " (restante)",
                 valor=l.valor - recebido, vencimento=data.restanteVencimento,
@@ -1827,11 +1835,12 @@ def receber_lancamento(lid: str, data: ReceberIn):
 
 
 @app.put("/api/financeiro/{lid}/estornar")
-def estornar_lancamento(lid: str):
+def estornar_lancamento(lid: str, request: Request):
     """Desfaz um recebimento marcado por engano (volta para 'em aberto')."""
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         l = db.get(Lancamento, lid)
-        if not l:
+        if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Lançamento não encontrado")
         l.pagoEm = None
         l.formaPagamento = ""
@@ -1841,10 +1850,11 @@ def estornar_lancamento(lid: str):
 
 
 @app.delete("/api/financeiro/{lid}", status_code=204)
-def delete_lancamento(lid: str):
+def delete_lancamento(lid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         l = db.get(Lancamento, lid)
-        if not l:
+        if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.delete(l)
         db.commit()
