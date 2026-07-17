@@ -1086,11 +1086,12 @@ def _nome_seguro(nome: str) -> str:
 
 
 @app.get("/api/anexos")
-def list_anexos(patient_id: str):
+def list_anexos(patient_id: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         rows = (
             db.query(Anexo)
-            .filter(Anexo.patientId == patient_id)
+            .filter(Anexo.patientId == patient_id, Anexo.clinicaId == quem.clinicaId)
             .order_by(Anexo.created_at.desc())
             .all()
         )
@@ -1099,10 +1100,12 @@ def list_anexos(patient_id: str):
 
 @app.post("/api/anexos", status_code=201)
 async def upload_anexo(
+    request: Request,
     patientId: str = Form(...),
     categoria: str = Form("documento"),
     file: UploadFile = File(...),
 ):
+    quem = _usuario_logado(request)
     _sb_configurado()
     if categoria not in ANEXO_CATEGORIAS:
         categoria = "outro"
@@ -1115,13 +1118,14 @@ async def upload_anexo(
     if len(conteudo) > ANEXO_MAX_BYTES:
         raise HTTPException(422, "Arquivo maior que 15 MB.")
     with SessionLocal() as db:
-        if not db.get(Paciente, patientId):
+        pac = db.get(Paciente, patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
         aid = _new_id()
         nome = _nome_seguro(file.filename or "arquivo")
         path = f"{patientId}/{aid}_{nome}"
         _sb_upload(path, conteudo, mime)
-        a = Anexo(id=aid, patientId=patientId, categoria=categoria, nome=file.filename or nome,
+        a = Anexo(id=aid, clinicaId=quem.clinicaId, patientId=patientId, categoria=categoria, nome=file.filename or nome,
                   mimeType=mime, tamanho=len(conteudo), storagePath=path)
         db.add(a)
         db.commit()
@@ -1129,21 +1133,23 @@ async def upload_anexo(
 
 
 @app.get("/api/anexos/{aid}/url")
-def anexo_url(aid: str):
+def anexo_url(aid: str, request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
     with SessionLocal() as db:
         a = db.get(Anexo, aid)
-        if not a:
+        if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Anexo não encontrado.")
         return {"url": _sb_signed_url(a.storagePath), "nome": a.nome, "mimeType": a.mimeType}
 
 
 @app.delete("/api/anexos/{aid}", status_code=204)
-def delete_anexo(aid: str):
+def delete_anexo(aid: str, request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
     with SessionLocal() as db:
         a = db.get(Anexo, aid)
-        if not a:
+        if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         path = a.storagePath
         db.delete(a)
@@ -1291,7 +1297,8 @@ class OdontogramaMarcaIn(BaseModel):
 
 
 @app.post("/api/odontograma", status_code=201)
-def create_marca_odontograma(data: OdontogramaMarcaIn):
+def create_marca_odontograma(data: OdontogramaMarcaIn, request: Request):
+    quem = _usuario_logado(request)
     if data.dente not in DENTES_VALIDOS:
         raise HTTPException(422, "Número de dente inválido.")
     if data.face not in FACES_VALIDAS:
@@ -1300,10 +1307,13 @@ def create_marca_odontograma(data: OdontogramaMarcaIn):
     if data.status not in validos:
         raise HTTPException(422, f"Status inválido para esta face. Use: {', '.join(sorted(validos))}")
     with SessionLocal() as db:
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
         if not db.get(Profissional, data.profissionalId):
             raise HTTPException(422, "Informe o profissional responsável.")
         m = OdontogramaMarca(
-            id=_new_id(), patientId=data.patientId, profissionalId=data.profissionalId,
+            id=_new_id(), clinicaId=quem.clinicaId, patientId=data.patientId, profissionalId=data.profissionalId,
             dente=data.dente, face=data.face, status=data.status, observacao=data.observacao.strip(),
         )
         db.add(m)
@@ -1313,11 +1323,12 @@ def create_marca_odontograma(data: OdontogramaMarcaIn):
 
 
 @app.get("/api/odontograma")
-def get_odontograma(patient_id: str):
+def get_odontograma(patient_id: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         rows = (
             db.query(OdontogramaMarca)
-            .filter(OdontogramaMarca.patientId == patient_id)
+            .filter(OdontogramaMarca.patientId == patient_id, OdontogramaMarca.clinicaId == quem.clinicaId)
             .order_by(OdontogramaMarca.created_at.asc())
             .all()
         )
@@ -1359,11 +1370,12 @@ class EvolucaoIn(BaseModel):
 
 
 @app.get("/api/evolucoes")
-def list_evolucoes(patient_id: str):
+def list_evolucoes(patient_id: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         rows = (
             db.query(Evolucao)
-            .filter(Evolucao.patientId == patient_id)
+            .filter(Evolucao.patientId == patient_id, Evolucao.clinicaId == quem.clinicaId)
             .order_by(Evolucao.created_at.desc())
             .all()
         )
@@ -1379,14 +1391,19 @@ def list_evolucoes(patient_id: str):
 
 
 @app.post("/api/evolucoes", status_code=201)
-def create_evolucao(data: EvolucaoIn):
+def create_evolucao(data: EvolucaoIn, request: Request):
+    quem = _usuario_logado(request)
     if not data.conteudo.strip():
         raise HTTPException(422, "A evolução precisa de conteúdo.")
     with SessionLocal() as db:
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
         if not db.get(Profissional, data.profissionalId):
             raise HTTPException(422, "Informe o profissional responsável pela evolução.")
         e = Evolucao(
             id=_new_id(),
+            clinicaId=quem.clinicaId,
             patientId=data.patientId,
             profissionalId=data.profissionalId,
             denteRegiao=data.denteRegiao.strip(),
