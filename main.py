@@ -1448,9 +1448,10 @@ def _orc_row(db, o: Orcamento, com_itens: bool = False) -> dict[str, Any]:
 
 
 @app.get("/api/orcamentos")
-def list_orcamentos():
+def list_orcamentos(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        rows = db.query(Orcamento).order_by(Orcamento.data.desc()).all()
+        rows = db.query(Orcamento).filter(Orcamento.clinicaId == quem.clinicaId).order_by(Orcamento.data.desc()).all()
         if not rows:
             return []
         ids = [o.id for o in rows]
@@ -1462,7 +1463,7 @@ def list_orcamentos():
             itens_por_orc.setdefault(it.orcamentoId, []).append(it)
         com_cobranca = {
             row[0] for row in db.query(Lancamento.numOrcamento)
-            .filter(Lancamento.numOrcamento.in_(ids)).distinct().all()
+            .filter(Lancamento.numOrcamento.in_(ids), Lancamento.clinicaId == quem.clinicaId).distinct().all()
         }
         result = []
         for o in rows:
@@ -1481,21 +1482,27 @@ def list_orcamentos():
 
 
 @app.get("/api/orcamentos/{oid}")
-def get_orcamento(oid: str):
+def get_orcamento(oid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
-        if not o:
+        if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Orçamento não encontrado")
         return _orc_row(db, o, com_itens=True)
 
 
 @app.post("/api/orcamentos", status_code=201)
-def create_orcamento(data: OrcamentoIn):
+def create_orcamento(data: OrcamentoIn, request: Request):
+    quem = _usuario_logado(request)
     if not data.itens:
         raise HTTPException(422, "Adicione pelo menos um item ao orçamento.")
     with SessionLocal() as db:
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         o = Orcamento(
             id=_new_id(),
+            clinicaId=quem.clinicaId,
             patientId=data.patientId,
             profissionalId=data.profissionalId,
             data=data.data,
@@ -1505,6 +1512,7 @@ def create_orcamento(data: OrcamentoIn):
         db.add(o)
         for it in data.itens:
             db.add(OrcamentoItem(
+                clinicaId=quem.clinicaId,
                 orcamentoId=o.id,
                 procedimento=it.procedimento.strip(),
                 denteRegiao=it.denteRegiao.strip(),
@@ -1516,13 +1524,17 @@ def create_orcamento(data: OrcamentoIn):
 
 
 @app.put("/api/orcamentos/{oid}")
-def update_orcamento(oid: str, data: OrcamentoIn):
+def update_orcamento(oid: str, data: OrcamentoIn, request: Request):
+    quem = _usuario_logado(request)
     if not data.itens:
         raise HTTPException(422, "Adicione pelo menos um item ao orçamento.")
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
-        if not o:
+        if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Orçamento não encontrado")
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado")
         o.patientId = data.patientId
         o.profissionalId = data.profissionalId
         o.data = data.data
@@ -1530,6 +1542,7 @@ def update_orcamento(oid: str, data: OrcamentoIn):
         db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).delete()
         for it in data.itens:
             db.add(OrcamentoItem(
+                clinicaId=quem.clinicaId,
                 orcamentoId=oid,
                 procedimento=it.procedimento.strip(),
                 denteRegiao=it.denteRegiao.strip(),
@@ -1545,12 +1558,13 @@ class OrcStatusIn(BaseModel):
 
 
 @app.put("/api/orcamentos/{oid}/status")
-def set_orcamento_status(oid: str, data: OrcStatusIn):
+def set_orcamento_status(oid: str, data: OrcStatusIn, request: Request):
+    quem = _usuario_logado(request)
     if data.status not in ORC_STATUS_VALIDOS:
         raise HTTPException(422, f"Status inválido. Use: {', '.join(sorted(ORC_STATUS_VALIDOS))}")
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
-        if not o:
+        if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Orçamento não encontrado")
         o.status = data.status
         db.commit()
@@ -1563,14 +1577,15 @@ class GerarCobrancasIn(BaseModel):
 
 
 @app.post("/api/orcamentos/{oid}/gerar-cobrancas", status_code=201)
-def gerar_cobrancas(oid: str, data: GerarCobrancasIn):
+def gerar_cobrancas(oid: str, data: GerarCobrancasIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
-        if not o:
+        if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Orçamento não encontrado")
         if o.status != "aprovado":
             raise HTTPException(409, "Só é possível gerar cobranças de orçamentos aprovados.")
-        if db.query(Lancamento).filter(Lancamento.numOrcamento == oid).first():
+        if db.query(Lancamento).filter(Lancamento.numOrcamento == oid, Lancamento.clinicaId == quem.clinicaId).first():
             raise HTTPException(409, "Este orçamento já tem cobranças geradas no financeiro.")
         itens = db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).all()
         total = sum(i.valor * i.quantidade for i in itens)
@@ -1585,6 +1600,7 @@ def gerar_cobrancas(oid: str, data: GerarCobrancasIn):
         for i in range(n):
             l = Lancamento(
                 id=_new_id(),
+                clinicaId=quem.clinicaId,
                 patientId=o.patientId,
                 profissionalId=o.profissionalId,
                 appointmentId=None,
@@ -1603,10 +1619,11 @@ def gerar_cobrancas(oid: str, data: GerarCobrancasIn):
 
 
 @app.delete("/api/orcamentos/{oid}", status_code=204)
-def delete_orcamento(oid: str):
+def delete_orcamento(oid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
-        if not o:
+        if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.query(OrcamentoItem).filter(OrcamentoItem.orcamentoId == oid).delete()
         db.delete(o)
