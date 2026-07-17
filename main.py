@@ -473,16 +473,18 @@ class PacienteIn(BaseModel):
 
 
 @app.get("/api/patients")
-def list_patients():
+def list_patients(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        return [_row(p) for p in db.query(Paciente).order_by(Paciente.name).all()]
+        return [_row(p) for p in db.query(Paciente).filter(Paciente.clinicaId == quem.clinicaId).order_by(Paciente.name).all()]
 
 
 @app.post("/api/patients", status_code=201)
-def create_patient(data: PacienteIn):
+def create_patient(data: PacienteIn, request: Request):
+    quem = _usuario_logado(request)
     pid = data.id or _new_id()
     with SessionLocal() as db:
-        p = Paciente(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=pid)
+        p = Paciente(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=pid, clinicaId=quem.clinicaId)
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -490,10 +492,11 @@ def create_patient(data: PacienteIn):
 
 
 @app.put("/api/patients/{pid}")
-def update_patient(pid: str, data: PacienteIn):
+def update_patient(pid: str, data: PacienteIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
         for k, v in data.model_dump(exclude={"id"}).items():
             setattr(p, k, v)
@@ -503,10 +506,11 @@ def update_patient(pid: str, data: PacienteIn):
 
 
 @app.delete("/api/patients/{pid}", status_code=204)
-def delete_patient(pid: str):
+def delete_patient(pid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.query(Consulta).filter(Consulta.patientId == pid).delete()
         db.delete(p)
@@ -835,13 +839,14 @@ def aniversariantes_hoje():
 
 
 @app.put("/api/patients/{pid}/birthday-sent")
-def mark_birthday_sent(pid: str):
+def mark_birthday_sent(pid: str, request: Request):
     """Marca que o parabéns foi enviado neste ano."""
+    quem = _usuario_logado(request)
     from datetime import date
     ano = str(date.today().year)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         p.birthdaySentYear = ano
         db.commit()
@@ -1211,7 +1216,8 @@ def delete_despesa(did: str):
 # FOTO DO PACIENTE  (Supabase Storage; substitui as iniciais na ficha)
 # ══════════════════════════════════════════════════════════════════════════════
 @app.post("/api/patients/{pid}/foto", status_code=201)
-async def upload_foto_paciente(pid: str, file: UploadFile = File(...)):
+async def upload_foto_paciente(pid: str, request: Request, file: UploadFile = File(...)):
+    quem = _usuario_logado(request)
     _sb_configurado()
     mime = (file.content_type or "").lower()
     if mime not in {"image/jpeg", "image/png", "image/webp"}:
@@ -1221,7 +1227,7 @@ async def upload_foto_paciente(pid: str, file: UploadFile = File(...)):
         raise HTTPException(422, "Imagem maior que 15 MB.")
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
         ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime]
         path = f"_fotos/{pid}.{ext}"
@@ -1232,20 +1238,22 @@ async def upload_foto_paciente(pid: str, file: UploadFile = File(...)):
 
 
 @app.get("/api/patients/{pid}/foto/url")
-def foto_paciente_url(pid: str):
+def foto_paciente_url(pid: str, request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p or not p.fotoPath:
+        if not p or p.clinicaId != quem.clinicaId or not p.fotoPath:
             raise HTTPException(404, "Sem foto.")
         return {"url": _sb_signed_url(p.fotoPath, segundos=600)}
 
 
 @app.delete("/api/patients/{pid}/foto", status_code=204)
-def delete_foto_paciente(pid: str):
+def delete_foto_paciente(pid: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         path = p.fotoPath
         p.fotoPath = None
