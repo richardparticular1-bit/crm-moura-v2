@@ -401,15 +401,17 @@ class ProfissionalIn(BaseModel):
 
 
 @app.get("/api/profissionais")
-def list_profissionais():
+def list_profissionais(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        return [_row(p) for p in db.query(Profissional).order_by(Profissional.nome).all()]
+        return [_row(p) for p in db.query(Profissional).filter(Profissional.clinicaId == quem.clinicaId).order_by(Profissional.nome).all()]
 
 
 @app.post("/api/profissionais", status_code=201)
-def create_profissional(data: ProfissionalIn):
+def create_profissional(data: ProfissionalIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        p = Profissional(**data.model_dump())
+        p = Profissional(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(p)
         db.commit()
         db.refresh(p)
@@ -417,10 +419,11 @@ def create_profissional(data: ProfissionalIn):
 
 
 @app.put("/api/profissionais/{pid}")
-def update_profissional(pid: int, data: ProfissionalIn):
+def update_profissional(pid: int, data: ProfissionalIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Profissional, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Profissional não encontrado")
         for k, v in data.model_dump().items():
             setattr(p, k, v)
@@ -430,10 +433,11 @@ def update_profissional(pid: int, data: ProfissionalIn):
 
 
 @app.delete("/api/profissionais/{pid}", status_code=204)
-def delete_profissional(pid: int):
+def delete_profissional(pid: int, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Profissional, pid)
-        if not p:
+        if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         db.delete(p)
         db.commit()
@@ -866,20 +870,22 @@ def mark_birthday_sent(pid: str, request: Request):
 # CONFIGURAÇÕES
 # ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/settings")
-def get_settings():
+def get_settings(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        return {c.key: c.value for c in db.query(Config).all()}
+        return {c.key: c.value for c in db.query(Config).filter(Config.clinicaId == quem.clinicaId).all()}
 
 
 @app.put("/api/settings")
-def save_settings(data: dict[str, str]):
+def save_settings(data: dict[str, str], request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         for k, v in data.items():
-            cfg = db.get(Config, (DEFAULT_CLINICA_ID, k))
+            cfg = db.get(Config, (quem.clinicaId, k))
             if cfg:
                 cfg.value = v
             else:
-                db.add(Config(clinicaId=DEFAULT_CLINICA_ID, key=k, value=v))
+                db.add(Config(clinicaId=quem.clinicaId, key=k, value=v))
         db.commit()
         return {"ok": True}
 
