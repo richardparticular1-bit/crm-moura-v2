@@ -1161,7 +1161,7 @@ async def upload_anexo(
             raise HTTPException(404, "Paciente não encontrado.")
         aid = _new_id()
         nome = _nome_seguro(file.filename or "arquivo")
-        path = f"{patientId}/{aid}_{nome}"
+        path = f"{quem.clinicaId}/{patientId}/{aid}_{nome}"
         _sb_upload(path, conteudo, mime)
         a = Anexo(id=aid, clinicaId=quem.clinicaId, patientId=patientId, categoria=categoria, nome=file.filename or nome,
                   mimeType=mime, tamanho=len(conteudo), storagePath=path)
@@ -1235,7 +1235,7 @@ async def create_despesa(
             raise HTTPException(422, "Comprovante maior que 15 MB.")
         comp_nome = comprovante.filename
         comp_mime = mime
-        comp_path = f"_despesas/{did}_{_nome_seguro(comprovante.filename)}"
+        comp_path = f"_despesas/{quem.clinicaId}/{did}_{_nome_seguro(comprovante.filename)}"
         _sb_upload(comp_path, conteudo, mime)
     with SessionLocal() as db:
         d = Despesa(id=did, clinicaId=quem.clinicaId, categoria=categoria, descricao=descricao.strip(), valor=valor, data=data,
@@ -1288,7 +1288,7 @@ async def upload_foto_paciente(pid: str, request: Request, file: UploadFile = Fi
         if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
         ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[mime]
-        path = f"_fotos/{pid}.{ext}"
+        path = f"_fotos/{quem.clinicaId}/{pid}.{ext}"
         _sb_upload(path, conteudo, mime)
         p.fotoPath = path
         db.commit()
@@ -1958,28 +1958,32 @@ def delete_lancamento(lid: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # DUMP / IMPORT
 # ══════════════════════════════════════════════════════════════════════════════
-def _dump_data(db) -> dict:
+def _dump_data(db, clinica_id: int) -> dict:
     return {
-        "patients": [_row(p) for p in db.query(Paciente).all()],
-        "appointments": [_row(a) for a in db.query(Consulta).all()],
-        "surveys": [_row(s) for s in db.query(Pesquisa).all()],
-        "profissionais": [_row(p) for p in db.query(Profissional).all()],
-        "tarefas": [_row(t) for t in db.query(Tarefa).all()],
-        "lancamentos": [_row(l) for l in db.query(Lancamento).all()],
-        "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None} for e in db.query(Evolucao).all()],
-        "orcamentos": [_row(o) for o in db.query(Orcamento).all()],
-        "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).all()],
-        "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None} for a in db.query(Anexo).all()],
-        "retorno_config": [_row(r) for r in db.query(RetornoConfig).all()],
-        "despesas": [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None} for d in db.query(Despesa).all()],
-        "settings": {c.key: c.value for c in db.query(Config).all()},
+        "patients": [_row(p) for p in db.query(Paciente).filter(Paciente.clinicaId == clinica_id).all()],
+        "appointments": [_row(a) for a in db.query(Consulta).filter(Consulta.clinicaId == clinica_id).all()],
+        "surveys": [_row(s) for s in db.query(Pesquisa).filter(Pesquisa.clinicaId == clinica_id).all()],
+        "profissionais": [_row(p) for p in db.query(Profissional).filter(Profissional.clinicaId == clinica_id).all()],
+        "tarefas": [_row(t) for t in db.query(Tarefa).filter(Tarefa.clinicaId == clinica_id).all()],
+        "lancamentos": [_row(l) for l in db.query(Lancamento).filter(Lancamento.clinicaId == clinica_id).all()],
+        "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None}
+                      for e in db.query(Evolucao).filter(Evolucao.clinicaId == clinica_id).all()],
+        "orcamentos": [_row(o) for o in db.query(Orcamento).filter(Orcamento.clinicaId == clinica_id).all()],
+        "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).filter(OrcamentoItem.clinicaId == clinica_id).all()],
+        "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None}
+                   for a in db.query(Anexo).filter(Anexo.clinicaId == clinica_id).all()],
+        "retorno_config": [_row(r) for r in db.query(RetornoConfig).filter(RetornoConfig.clinicaId == clinica_id).all()],
+        "despesas": [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None}
+                     for d in db.query(Despesa).filter(Despesa.clinicaId == clinica_id).all()],
+        "settings": {c.key: c.value for c in db.query(Config).filter(Config.clinicaId == clinica_id).all()},
     }
 
 
 @app.get("/api/dump")
-def dump():
+def dump(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        return _dump_data(db)
+        return _dump_data(db, quem.clinicaId)
 
 
 def _sb_list(prefixo: str) -> list[str]:
@@ -1995,42 +1999,52 @@ def _sb_list(prefixo: str) -> list[str]:
     return [o["name"] for o in r.json() if o.get("name")]
 
 
-BACKUP_RETENCAO = 30  # mantém os 30 backups mais recentes
+BACKUP_RETENCAO = 30  # mantém os 30 backups mais recentes, por clínica
 
 
-def _fazer_backup() -> str:
-    """Gera o dump completo e envia ao Supabase Storage. Retorna o nome do arquivo."""
+def _fazer_backup(clinica_id: int) -> str:
+    """Gera o dump de UMA clínica e envia ao Supabase Storage, em pasta própria.
+    Retorna o nome do arquivo."""
     with SessionLocal() as db:
-        data = _dump_data(db)
+        data = _dump_data(db, clinica_id)
     blob = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
     nome = f"backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-    _sb_upload(f"_backups/{nome}", blob, "application/json")
-    for velho in _sb_list("_backups")[BACKUP_RETENCAO:]:
-        _sb_delete(f"_backups/{velho}")
+    _sb_upload(f"_backups/{clinica_id}/{nome}", blob, "application/json")
+    for velho in _sb_list(f"_backups/{clinica_id}")[BACKUP_RETENCAO:]:
+        _sb_delete(f"_backups/{clinica_id}/{velho}")
     return nome
 
 
 def backup_automatico():
-    """Job diário do scheduler. Silencioso: nunca derruba a aplicação."""
+    """Job diário do scheduler. Roda uma vez POR CLÍNICA ativa, cada uma na sua
+    própria pasta no Storage. Silencioso: nunca derruba a aplicação."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
-        _fazer_backup()
+        with SessionLocal() as db:
+            clinica_ids = [c.id for c in db.query(Clinica.id).filter(Clinica.ativa == True).all()]  # noqa: E712
+        for cid in clinica_ids:
+            try:
+                _fazer_backup(cid)
+            except Exception:
+                pass  # uma clínica falhando não deve travar as demais
     except Exception:
         pass
 
 
 @app.post("/api/backup/agora", status_code=201)
-def backup_agora():
+def backup_agora(request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
-    nome = _fazer_backup()
+    nome = _fazer_backup(quem.clinicaId)
     return {"ok": True, "arquivo": nome}
 
 
 @app.get("/api/backups")
-def list_backups():
+def list_backups(request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
-    return {"arquivos": _sb_list("_backups")[:BACKUP_RETENCAO]}
+    return {"arquivos": _sb_list(f"_backups/{quem.clinicaId}")[:BACKUP_RETENCAO]}
 
 
 class DumpIn(BaseModel):
@@ -2042,25 +2056,26 @@ class DumpIn(BaseModel):
 
 
 @app.post("/api/import")
-def import_dump(data: DumpIn):
+def import_dump(data: DumpIn, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         for p in data.patients:
             if not db.get(Paciente, p["id"]):
-                db.add(Paciente(**{k: v for k, v in p.items() if hasattr(Paciente, k)}))
+                db.add(Paciente(**{k: v for k, v in p.items() if hasattr(Paciente, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
         for a in data.appointments:
             if not db.get(Consulta, a["id"]):
-                db.add(Consulta(**{k: v for k, v in a.items() if hasattr(Consulta, k)}))
+                db.add(Consulta(**{k: v for k, v in a.items() if hasattr(Consulta, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
         for s in data.surveys:
             if not db.get(Pesquisa, s["id"]):
-                db.add(Pesquisa(**{k: v for k, v in s.items() if hasattr(Pesquisa, k)}))
+                db.add(Pesquisa(**{k: v for k, v in s.items() if hasattr(Pesquisa, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
         for l in data.lancamentos:
             if not db.get(Lancamento, l["id"]):
-                db.add(Lancamento(**{k: v for k, v in l.items() if hasattr(Lancamento, k)}))
+                db.add(Lancamento(**{k: v for k, v in l.items() if hasattr(Lancamento, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
         for k, v in data.settings.items():
-            cfg = db.get(Config, (DEFAULT_CLINICA_ID, k))
+            cfg = db.get(Config, (quem.clinicaId, k))
             if cfg:
                 cfg.value = str(v)
             else:
-                db.add(Config(clinicaId=DEFAULT_CLINICA_ID, key=k, value=str(v)))
+                db.add(Config(clinicaId=quem.clinicaId, key=k, value=str(v)))
         db.commit()
     return {"ok": True, "patients": len(data.patients), "appointments": len(data.appointments)}
