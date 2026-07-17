@@ -1164,20 +1164,23 @@ DESPESA_CATEGORIAS = {"aluguel", "material", "laboratorio", "salario", "marketin
 
 
 @app.get("/api/despesas")
-def list_despesas():
+def list_despesas(request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
-        rows = db.query(Despesa).order_by(Despesa.data.desc()).all()
+        rows = db.query(Despesa).filter(Despesa.clinicaId == quem.clinicaId).order_by(Despesa.data.desc()).all()
         return [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None} for d in rows]
 
 
 @app.post("/api/despesas", status_code=201)
 async def create_despesa(
+    request: Request,
     categoria: str = Form("outro"),
     descricao: str = Form(""),
     valor: int = Form(...),
     data: str = Form(...),
     comprovante: UploadFile | None = File(None),
 ):
+    quem = _usuario_logado(request)
     if categoria not in DESPESA_CATEGORIAS:
         categoria = "outro"
     if valor <= 0:
@@ -1197,7 +1200,7 @@ async def create_despesa(
         comp_path = f"_despesas/{did}_{_nome_seguro(comprovante.filename)}"
         _sb_upload(comp_path, conteudo, mime)
     with SessionLocal() as db:
-        d = Despesa(id=did, categoria=categoria, descricao=descricao.strip(), valor=valor, data=data,
+        d = Despesa(id=did, clinicaId=quem.clinicaId, categoria=categoria, descricao=descricao.strip(), valor=valor, data=data,
                     comprovanteNome=comp_nome, comprovanteMime=comp_mime, comprovantePath=comp_path)
         db.add(d)
         db.commit()
@@ -1205,20 +1208,22 @@ async def create_despesa(
 
 
 @app.get("/api/despesas/{did}/comprovante-url")
-def despesa_comprovante_url(did: str):
+def despesa_comprovante_url(did: str, request: Request):
+    quem = _usuario_logado(request)
     _sb_configurado()
     with SessionLocal() as db:
         d = db.get(Despesa, did)
-        if not d or not d.comprovantePath:
+        if not d or d.clinicaId != quem.clinicaId or not d.comprovantePath:
             raise HTTPException(404, "Sem comprovante.")
         return {"url": _sb_signed_url(d.comprovantePath), "nome": d.comprovanteNome}
 
 
 @app.delete("/api/despesas/{did}", status_code=204)
-def delete_despesa(did: str):
+def delete_despesa(did: str, request: Request):
+    quem = _usuario_logado(request)
     with SessionLocal() as db:
         d = db.get(Despesa, did)
-        if not d:
+        if not d or d.clinicaId != quem.clinicaId:
             raise HTTPException(404)
         path = d.comprovantePath
         db.delete(d)
