@@ -45,6 +45,32 @@ VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
 VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
 VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
 
+# Envio de e-mail transacional (Resend). Usado só pela Fase 4 (cadastro público
+# de clínica): confirmação de e-mail antes do primeiro acesso.
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
+APP_URL = os.environ.get("APP_URL", "https://crm-moura.onrender.com")
+
+
+def _email_configurado():
+    if not RESEND_API_KEY:
+        raise HTTPException(503, "Envio de e-mail não configurado neste servidor.")
+
+
+def _enviar_email(destinatario: str, assunto: str, html: str) -> bool:
+    if not RESEND_API_KEY:
+        return False
+    try:
+        r = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+            json={"from": RESEND_FROM, "to": [destinatario], "subject": assunto, "html": html},
+            timeout=15,
+        )
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
+
 scheduler = BackgroundScheduler()
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -120,7 +146,8 @@ def icon512():
 # AUTENTICAÇÃO  (bcrypt + sessões com token opaco; TODA a API exige login)
 # ══════════════════════════════════════════════════════════════════════════════
 SESSAO_DIAS = 30
-AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status")
+AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
+              "/api/signup", "/api/verify-email", "/api/resend-verification")
 
 
 def _hash_senha(senha: str) -> str:
@@ -235,9 +262,91 @@ def auth_login(data: LoginIn):
             raise HTTPException(401, "E-mail ou senha incorretos.")
         if not u.ativo:
             raise HTTPException(403, "Usuário desativado. Fale com o administrador.")
+        if not u.emailVerificado:
+            raise HTTPException(403, "Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.")
         LOGIN_FALHAS.pop(email, None)
         token = _criar_sessao(db, u)
         return {"token": token, "nome": u.nome}
+
+
+class SignupIn(BaseModel):
+    clinicaNome: str
+    nome: str
+    email: str
+    senha: str
+
+
+def _email_confirmacao_html(nome: str, link: str) -> str:
+    return f"""
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+      <h2 style="color:#0f766e">Bem-vindo(a), {nome}! 🦷</h2>
+      <p>Falta um passo para começar a usar o sistema: confirme seu e-mail clicando no botão abaixo.</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="{link}" style="background:#0f766e;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600">Confirmar e-mail</a>
+      </p>
+      <p style="font-size:13px;color:#666">Se o botão não funcionar, copie e cole este link no navegador:<br>{link}</p>
+    </div>"""
+
+
+@app.post("/api/signup", status_code=201)
+def signup(data: SignupIn):
+    _email_configurado()
+    if len(data.senha) < 8:
+        raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
+    if not data.clinicaNome.strip():
+        raise HTTPException(422, "Informe o nome da clínica.")
+    email = data.email.strip().lower()
+    with SessionLocal() as db:
+        if db.query(Usuario).filter(Usuario.email == email).first():
+            raise HTTPException(409, "Já existe uma conta com este e-mail.")
+        clinica = Clinica(nome=data.clinicaNome.strip(), plano="trial", ativa=True)
+        db.add(clinica)
+        db.flush()
+        token = secrets.token_urlsafe(32)
+        u = Usuario(
+            clinicaId=clinica.id, nome=data.nome.strip(), email=email,
+            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=False,
+            emailVerificado=False, emailVerifyToken=token,
+        )
+        db.add(u)
+        db.commit()
+        link = f"{APP_URL}/?verify={token}"
+        enviado = _enviar_email(email, "Confirme seu e-mail — CRM", _email_confirmacao_html(u.nome, link))
+        return {"ok": True, "emailEnviado": enviado}
+
+
+@app.get("/api/verify-email")
+def verify_email(token: str):
+    with SessionLocal() as db:
+        u = db.query(Usuario).filter(Usuario.emailVerifyToken == token).first()
+        if not u:
+            raise HTTPException(404, "Link de confirmação inválido ou já utilizado.")
+        u.emailVerificado = True
+        u.emailVerifyToken = None
+        db.commit()
+        sessao_token = _criar_sessao(db, u)
+        return {"token": sessao_token, "nome": u.nome}
+
+
+class ResendVerificationIn(BaseModel):
+    email: str
+
+
+@app.post("/api/resend-verification")
+def resend_verification(data: ResendVerificationIn):
+    _email_configurado()
+    email = data.email.strip().lower()
+    with SessionLocal() as db:
+        u = db.query(Usuario).filter(Usuario.email == email).first()
+        # Resposta genérica sempre, para não confirmar quais e-mails existem no sistema.
+        if not u or u.emailVerificado:
+            return {"ok": True}
+        token = secrets.token_urlsafe(32)
+        u.emailVerifyToken = token
+        db.commit()
+        link = f"{APP_URL}/?verify={token}"
+        _enviar_email(email, "Confirme seu e-mail — CRM", _email_confirmacao_html(u.nome, link))
+        return {"ok": True}
 
 
 @app.post("/api/auth/logout")
