@@ -2386,19 +2386,34 @@ async function testPush(){
 /* ════════════════════════════════════════════
    LOGIN / SETUP / EQUIPE
 ════════════════════════════════════════════ */
+let LOGIN_MODE = "login"; // login | signup
 async function showLogin(){
   document.getElementById("login-screen")?.remove();
   let setup = false;
   try { const s = await fetch(API + "/auth/status").then(r=>r.json()); setup = !!s.setup; } catch(e){}
+  const modo = setup ? "setup" : LOGIN_MODE;
   const div = document.createElement("div");
   div.id = "login-screen";
   div.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--teal-900);display:flex;align-items:center;justify-content:center;padding:18px";
-  div.innerHTML = `
-    <div style="background:#fff;border-radius:18px;padding:28px;width:100%;max-width:380px">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+  const logoHTML = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
         <svg width="34" height="34" viewBox="0 0 32 32"><path d="M16 4c-4 0-9 1.5-9 7 0 4 1.5 6 2.4 9.5.9 3.6 1.3 7.5 3.4 7.5 2 0 1.4-5 3.2-5s1.2 5 3.2 5c2.1 0 2.5-3.9 3.4-7.5C23.5 17 25 15 25 11c0-5.5-5-7-9-7z" fill="#0f766e"/></svg>
         <div><b style="font-size:17px">CRM Moura</b><div class="meta">Odontologia e Associados</div></div>
-      </div>
+      </div>`;
+  if(modo === "signup"){
+    div.innerHTML = `<div id="login-card" style="background:#fff;border-radius:18px;padding:28px;width:100%;max-width:380px">
+      ${logoHTML}
+      <h2 style="font-size:15px;margin-bottom:4px">Cadastrar sua clínica</h2>
+      <p class="meta" style="margin-bottom:14px">Acesso imediato, período trial — sem cartão de crédito.</p>
+      <label class="f"><span>Nome da clínica</span><input id="lg-clinica" autocomplete="organization"></label>
+      <label class="f"><span>Seu nome</span><input id="lg-nome" autocomplete="name"></label>
+      <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
+      <label class="f"><span>Senha (mínimo 8 caracteres)</span><input id="lg-senha" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')signupSubmit()"></label>
+      <button class="btn" style="width:100%;justify-content:center;margin-top:6px" onclick="signupSubmit()">Criar minha clínica</button>
+      <p style="text-align:center;margin-top:14px;font-size:13px"><a href="#" onclick="LOGIN_MODE='login';showLogin();return false" style="color:var(--teal-700);font-weight:600">Já tenho conta — entrar</a></p>
+    </div>`;
+  } else {
+    div.innerHTML = `<div id="login-card" style="background:#fff;border-radius:18px;padding:28px;width:100%;max-width:380px">
+      ${logoHTML}
       ${setup ? `
         <h2 style="font-size:15px;margin-bottom:4px">Primeiro acesso</h2>
         <p class="meta" style="margin-bottom:14px">Crie o usuário administrador do sistema.</p>
@@ -2407,9 +2422,11 @@ async function showLogin(){
       <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
       <label class="f"><span>Senha ${setup?"(mínimo 8 caracteres)":""}</span><input id="lg-senha" type="password" autocomplete="${setup?"new-password":"current-password"}" onkeydown="if(event.key==='Enter')authSubmit(${setup})"></label>
       <button class="btn" style="width:100%;justify-content:center;margin-top:6px" onclick="authSubmit(${setup})">${setup?"Criar e entrar":"Entrar"}</button>
+      ${setup?"":`<p style="text-align:center;margin-top:14px;font-size:13px"><a href="#" onclick="LOGIN_MODE='signup';showLogin();return false" style="color:var(--teal-700);font-weight:600">Cadastrar uma clínica nova</a></p>`}
     </div>`;
+  }
   document.body.appendChild(div);
-  setTimeout(()=>document.getElementById(setup?"lg-nome":"lg-email")?.focus(), 50);
+  setTimeout(()=>document.getElementById(modo==="setup"?"lg-nome":(modo==="signup"?"lg-clinica":"lg-email"))?.focus(), 50);
 }
 async function authSubmit(setup){
   const g=i=>document.getElementById(i)?.value;
@@ -2425,6 +2442,38 @@ async function authSubmit(setup){
     document.getElementById("login-screen")?.remove();
     await reloadAll();
     toast(`Bem-vindo, ${AUTH_NOME.split(" ")[0]}! 👋`);
+  }catch(e){
+    if(e.message && e.message.includes("Confirme seu e-mail")){
+      const card = document.getElementById("login-card");
+      if(card && !document.getElementById("lg-resend-link")){
+        card.insertAdjacentHTML("beforeend", `<p id="lg-resend-link" style="text-align:center;margin-top:10px;font-size:13px"><a href="#" onclick="resendVerification('${email.replace(/'/g,"")}');return false" style="color:var(--teal-700);font-weight:600">Reenviar e-mail de confirmação</a></p>`);
+      }
+    }
+  }
+}
+async function signupSubmit(){
+  const g=i=>document.getElementById(i)?.value;
+  const clinicaNome=(g("lg-clinica")||"").trim(), nome=(g("lg-nome")||"").trim();
+  const email=(g("lg-email")||"").trim(), senha=g("lg-senha")||"";
+  if(!clinicaNome || !nome || !email || !senha){ toast("Preencha todos os campos."); return; }
+  if(senha.length<8){ toast("A senha precisa de pelo menos 8 caracteres."); return; }
+  try{
+    await api("POST","/signup",{clinicaNome, nome, email, senha});
+    const card = document.getElementById("login-card");
+    if(card){
+      card.innerHTML = `<div style="text-align:center;padding:12px 0">
+        <div style="font-size:40px;margin-bottom:10px">📧</div>
+        <h2 style="font-size:16px;margin-bottom:8px">Confirme seu e-mail</h2>
+        <p class="meta" style="margin-bottom:16px">Enviamos um link de confirmação para <b>${esc(email)}</b>. Clique nele para ativar sua clínica.</p>
+        <a href="#" onclick="LOGIN_MODE='login';showLogin();return false" style="color:var(--teal-700);font-weight:600;font-size:13px">Voltar para o login</a>
+      </div>`;
+    }
+  }catch(e){ /* toast já exibido pelo api() */ }
+}
+async function resendVerification(email){
+  try{
+    await api("POST","/resend-verification",{email});
+    toast("Se o e-mail existir, reenviamos a confirmação. Confira sua caixa de entrada.");
   }catch(e){ /* toast já exibido pelo api() */ }
 }
 async function logout(){
@@ -2507,6 +2556,26 @@ if("serviceWorker" in navigator){
 
 /* ── inicialização ── */
 (async function boot(){
+  const params = new URLSearchParams(window.location.search);
+  const verifyToken = params.get("verify");
+  if(verifyToken){
+    history.replaceState(null, "", window.location.pathname); // limpa o token da URL
+    try{
+      const r = await fetch(API + "/verify-email?token=" + encodeURIComponent(verifyToken)).then(async res=>{
+        if(!res.ok){ const j = await res.json().catch(()=>({})); throw new Error(j.detail || "Link inválido."); }
+        return res.json();
+      });
+      AUTH_TOKEN = r.token; AUTH_NOME = r.nome;
+      localStorage.setItem("crm_token", AUTH_TOKEN);
+      localStorage.setItem("crm_nome", AUTH_NOME);
+      await reloadAll();
+      toast(`E-mail confirmado — bem-vindo(a), ${AUTH_NOME.split(" ")[0]}! 🎉`);
+      return;
+    }catch(e){
+      toast(e.message || "Não foi possível confirmar o e-mail.");
+      // segue para o fluxo normal de login abaixo
+    }
+  }
   if(!AUTH_TOKEN){ showLogin(); return; }
   try { await reloadAll(); }
   catch(e){ /* 401 já redireciona para o login dentro do api() */ }
