@@ -1337,7 +1337,7 @@ const STATUS_DENTE_LABEL = { nenhum:"Nenhum (limpar)", ausente:"Ausente/Extraíd
 const FACE_STATUS_SIGLA = { cariado:"C", restaurado:"R", fraturado:"Fx" };
 
 function _odontoToothSVG(numero, estadoDente, bloco, interactive){
-  const T = 40, cell = T/3;
+  const T = 40, cell = T/3, LABEL_H = 12; // LABEL_H: espaço reservado no topo para o número do dente
   const faces = (estadoDente && estadoDente.faces) || {};
   const denteStatus = estadoDente && estadoDente.dente;
   const topFace = bloco.arch === "upper" ? "vestibular" : "lingual";
@@ -1351,21 +1351,24 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
     const sigla = st ? `<text x="${x+cell/2}" y="${y+cell/2+2.6}" font-size="7.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="sans-serif" pointer-events="none">${FACE_STATUS_SIGLA[st]||""}</text>` : "";
     return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${st?" - "+STATUS_FACE_LABEL[st]:""}</title></rect>${sigla}`;
   };
-  let svg = `<svg width="${T}" height="${T+14}" viewBox="0 0 ${T} ${T+14}" style="overflow:visible">`;
-  svg += cellRect(topFace, cell, 0);
-  svg += cellRect(leftFace, 0, cell);
-  svg += cellRect("oclusal", cell, cell);
-  svg += cellRect(rightFace, cell*2, cell);
-  svg += cellRect(bottomFace, cell, cell*2);
+  // A grade de faces (e o badge abaixo dela) é desenhada deslocada em LABEL_H,
+  // deixando de fato espaço dentro do viewBox para o número do dente no topo —
+  // antes ele ficava em y=-4, fora do viewBox, e vivia cortado na fileira de cima.
+  let svg = `<svg width="${T}" height="${T+14+LABEL_H}" viewBox="0 0 ${T} ${T+14+LABEL_H}">`;
+  svg += cellRect(topFace, cell, LABEL_H);
+  svg += cellRect(leftFace, 0, cell+LABEL_H);
+  svg += cellRect("oclusal", cell, cell+LABEL_H);
+  svg += cellRect(rightFace, cell*2, cell+LABEL_H);
+  svg += cellRect(bottomFace, cell, cell*2+LABEL_H);
   if(denteStatus && DENTE_BADGE[denteStatus]){
     const b = DENTE_BADGE[denteStatus];
     if(denteStatus==="ausente"){
-      svg += `<line x1="1" y1="1" x2="${T-1}" y2="${T-1}" stroke="#64748b" stroke-width="2.4"/><line x1="${T-1}" y1="1" x2="1" y2="${T-1}" stroke="#64748b" stroke-width="2.4"/>`;
+      svg += `<line x1="1" y1="${1+LABEL_H}" x2="${T-1}" y2="${T-1+LABEL_H}" stroke="#64748b" stroke-width="2.4"/><line x1="${T-1}" y1="${1+LABEL_H}" x2="1" y2="${T-1+LABEL_H}" stroke="#64748b" stroke-width="2.4"/>`;
     }
-    svg += `<circle cx="${T/2}" cy="${T+7}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${T+9.5}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
+    svg += `<circle cx="${T/2}" cy="${T+7+LABEL_H}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${T+9.5+LABEL_H}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
   }
   const numClick = interactive ? `onclick="onOdontoDenteClick('${numero}')" style="cursor:pointer"` : "";
-  svg += `<text x="${T/2}" y="-4" font-size="10" font-weight="700" fill="#334155" text-anchor="middle" font-family="sans-serif" ${numClick}>${numero}</text>`;
+  svg += `<text x="${T/2}" y="${LABEL_H-2}" font-size="10" font-weight="700" fill="#334155" text-anchor="middle" font-family="sans-serif" ${numClick}>${numero}</text>`;
   svg += `</svg>`;
   return svg;
 }
