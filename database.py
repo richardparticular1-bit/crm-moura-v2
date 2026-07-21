@@ -4,18 +4,35 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import Base
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Segurança: no Render, subir sem DATABASE_URL significaria usar SQLite em /tmp,
+# que é apagado a cada restart/deploy — perda silenciosa de dados de produção.
+# Melhor o deploy quebrar na hora do que perder prontuário de paciente.
+if os.environ.get("RENDER") and not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL não configurada no Render — "
+        "os dados seriam perdidos a cada restart."
+    )
+
 if DATABASE_URL:
-    engine = create_engine(DATABASE_URL)
+    # pool_pre_ping: testa a conexão antes de usar, evitando erros esporádicos
+    # de "server closed the connection unexpectedly" com o pooler do Supabase.
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+    print(f"[DB] Usando Postgres: {DATABASE_URL.split('@')[-1]}")  # só host, sem senha
 else:
     if os.environ.get("RENDER"):
         DB_PATH = Path("/tmp/crm.db")
     else:
         DB_PATH = Path(__file__).parent / "crm.db"
     engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+    print(f"[DB] Usando SQLite em {DB_PATH}")
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
 DEFAULT_SETTINGS = {
     "googleReviewLink": "https://g.page/r/SEU_LINK_AQUI/review",
     "inactivityMonths": "6",
@@ -27,6 +44,8 @@ DEFAULT_SETTINGS = {
     "notifLembreteMinutos": "60",
     "notifAtivas": "true",
 }
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # Multi-tenant: settings agora tem chave composta (clinicaId, key).
