@@ -1876,6 +1876,9 @@ def list_retornos(request: Request):
             if p.id in futuros or not p.lastVisit:
                 continue
             cfg = configs.get(p.id)
+            # Cooldown: convite enviado há menos de 30 dias sai da fila
+            if cfg and cfg.sentAt and cfg.sentAt > (date.today() - timedelta(days=30)).isoformat():
+                continue
             meses = cfg.meses if (cfg and cfg.meses) else padrao
             due = _add_meses(p.lastVisit, meses)
             if due <= janela:
