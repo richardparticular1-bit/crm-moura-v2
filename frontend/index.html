@@ -1553,6 +1553,7 @@ async function gerarAnamnese(pid){
     .odonto-box{border:1px solid #999;min-height:170px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;margin-bottom:10px}
     .noprint{margin-bottom:14px}
     @media print{ .noprint{display:none} body.mode-gray{filter:grayscale(1)} body.mode-allblack{filter:grayscale(1) contrast(1000%)} }
+    body.mode-color{filter:none}
     body.preview.mode-gray{filter:grayscale(1)}
     body.preview.mode-allblack{filter:grayscale(1) contrast(1000%)}
   </style></head><body class="mode-gray">
@@ -1560,7 +1561,8 @@ async function gerarAnamnese(pid){
     <button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#334155">
       Modo:
-      <select onchange="document.body.classList.remove('mode-gray','mode-allblack');document.body.classList.add(this.value)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+      <select onchange="document.body.classList.remove('mode-gray','mode-allblack','mode-color');document.body.classList.add(this.value)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+        <option value="mode-color">Colorida</option>
         <option value="mode-gray" selected>Escala de cinza</option>
         <option value="mode-allblack">Preto e branco (alto contraste)</option>
       </select>
