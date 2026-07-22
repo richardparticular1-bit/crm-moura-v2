@@ -357,3 +357,20 @@ class ConsentimentoMidia(Base):
     assinaturaPath: Mapped[str | None] = mapped_column(String(300), nullable=True)  # rubrica daquele evento, no Storage
     profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))  # quem colheu
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ConsentimentoOrcamento(Base):
+    """Prova de que o paciente concordou com um plano de tratamento e seu
+    valor — rubrica do paciente E do profissional coletadas no momento da
+    aprovação do orçamento. Registro IMUTÁVEL, um por aprovação; não existe
+    edição nem reaprovação — um orçamento recusado e reapresentado gera um
+    orçamento novo, com seu próprio consentimento."""
+    __tablename__ = "consentimentos_orcamento"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    orcamentoId: Mapped[str] = mapped_column(String(20), ForeignKey("orcamentos.id"))
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))
+    assinaturaPacientePath: Mapped[str] = mapped_column(String(300))
+    assinaturaProfissionalPath: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
