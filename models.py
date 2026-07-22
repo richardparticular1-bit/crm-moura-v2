@@ -339,3 +339,21 @@ class OdontogramaMarca(Base):
     status: Mapped[str] = mapped_column(String(20))
     observacao: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class ConsentimentoMidia(Base):
+    """Consentimento do paciente para usos de mídia clínica (fotos/vídeos,
+    radiografias, divulgação científica ou de marketing). Registro IMUTÁVEL,
+    um por tipo de autorização — revogar não edita a linha anterior, cria uma
+    nova com status='revogado'; o estado vigente de cada tipo é sempre a
+    linha mais recente daquele tipo. Vale por prazo indeterminado até ser
+    revogado; não expira sozinho."""
+    __tablename__ = "consentimentos_midia"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    tipo: Mapped[str] = mapped_column(String(40))    # ver TIPOS_CONSENTIMENTO_MIDIA no main.py
+    status: Mapped[str] = mapped_column(String(20))  # autorizado | revogado
+    assinaturaPath: Mapped[str | None] = mapped_column(String(300), nullable=True)  # rubrica daquele evento, no Storage
+    profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))  # quem colheu
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
