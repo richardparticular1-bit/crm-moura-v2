@@ -1,4 +1,4 @@
-"""Modelos do banco do CRM — versão 2.2 (+ módulo financeiro)"""
+"""Modelos do banco do CRM — versão 2.3 (+ identidade da clínica e marca da plataforma)"""
 from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -125,6 +125,29 @@ class Clinica(Base):
     plano: Mapped[str] = mapped_column(String(30), default="trial")
     ativa: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # ── identidade e dados legais do consultório (v2.3) — usados no cabeçalho do
+    # app, na anamnese impressa e em qualquer documento que precise identificar
+    # legalmente a clínica. logoPath aponta pro Supabase Storage (mesmo padrão
+    # de fotoPath em Paciente); os demais são texto livre preenchido no cadastro
+    # ou em Ajustes > Perfil do Consultório.
+    logoPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    responsavelTecnico: Mapped[str] = mapped_column(String(150), default="")  # dentista responsável técnico
+    croResponsavel: Mapped[str] = mapped_column(String(30), default="")       # CRO do responsável técnico
+    cnpj: Mapped[str] = mapped_column(String(20), default="")
+    enderecoCompleto: Mapped[str] = mapped_column(String(300), default="")
+    telefoneWhatsapp: Mapped[str] = mapped_column(String(30), default="")
+    email: Mapped[str] = mapped_column(String(120), default="")              # e-mail institucional da clínica
+
+
+class Plataforma(Base):
+    """Marca neutra da plataforma (ex: OdontoDesk), exibida na tela de login
+    ANTES do usuário se autenticar — quando o sistema ainda não sabe de qual
+    clínica se trata. Linha única, id sempre 1. Editável só por superadmin."""
+    __tablename__ = "plataforma"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    nome: Mapped[str] = mapped_column(String(150), default="OdontoDesk")
+    logoPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class Config(Base):
@@ -257,6 +280,11 @@ class Anexo(Base):
     mimeType: Mapped[str] = mapped_column(String(100))
     tamanho: Mapped[int] = mapped_column(Integer, default=0)  # bytes
     storagePath: Mapped[str] = mapped_column(String(300))   # caminho no bucket
+    # Se este anexo é uma CÓPIA EDITADA (recorte, marcação, ajuste) de outro
+    # anexo já existente, origemId aponta pro original. O original nunca é
+    # sobrescrito — toda edição nasce como um anexo novo e independente,
+    # preservando o arquivo-fonte intacto para fins legais/diagnósticos.
+    origemId: Mapped[str | None] = mapped_column(String(20), ForeignKey("anexos.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
