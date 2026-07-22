@@ -285,6 +285,15 @@ class Anexo(Base):
     # sobrescrito — toda edição nasce como um anexo novo e independente,
     # preservando o arquivo-fonte intacto para fins legais/diagnósticos.
     origemId: Mapped[str | None] = mapped_column(String(20), ForeignKey("anexos.id"), nullable=True)
+    # Campos opcionais usados só por categorias específicas de imagem clínica:
+    # - categoria="elemento": dente (e opcionalmente face) identificam de qual
+    #   dente/face é a foto — mesmo vocabulário do odontograma (face="dente"
+    #   quando a foto é do dente inteiro, não de uma face específica).
+    # - categoria="periapical" / "facial": posicao identifica o slot fixo da
+    #   grade (ex: "sup_canino_dir", "perfil_direito").
+    dente: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    face: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    posicao: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
