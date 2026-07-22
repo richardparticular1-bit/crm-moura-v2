@@ -479,6 +479,27 @@ def set_plataforma(data: PlataformaIn, request: Request):
     return {"ok": True}
 
 
+ASSINATURA_MAX_BYTES = 2 * 1024 * 1024  # 2 MB — assinatura/logo é simples, nunca deveria chegar perto disso
+
+
+class AssinaturaIn(BaseModel):
+    dataUrl: str  # data URL do canvas/imagem, ex: "data:image/png;base64,iVBORw0KG..."
+
+
+def _decodificar_assinatura(data_url: str) -> bytes:
+    if not data_url or "," not in data_url or "image/png" not in data_url.split(",", 1)[0]:
+        raise HTTPException(422, "Imagem inválida — envie um PNG.")
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[1])
+    except Exception:
+        raise HTTPException(422, "Imagem inválida.")
+    if len(raw) == 0:
+        raise HTTPException(422, "Imagem vazia.")
+    if len(raw) > ASSINATURA_MAX_BYTES:
+        raise HTTPException(422, "Imagem maior que 2 MB.")
+    return raw
+
+
 def _path_logo_plataforma() -> str:
     return "_plataforma/logo.png"
 
@@ -1720,25 +1741,6 @@ def delete_foto_paciente(pid: str, request: Request):
 # Caminho determinístico (um arquivo fixo por paciente/profissional) — dispensa
 # qualquer coluna nova no banco: a existência do arquivo no Storage já diz se a
 # assinatura foi coletada ou não.
-ASSINATURA_MAX_BYTES = 2 * 1024 * 1024  # 2 MB — assinatura é um traço simples, nunca deveria chegar perto disso
-
-
-class AssinaturaIn(BaseModel):
-    dataUrl: str  # data URL do canvas, ex: "data:image/png;base64,iVBORw0KG..."
-
-
-def _decodificar_assinatura(data_url: str) -> bytes:
-    if not data_url or "," not in data_url or "image/png" not in data_url.split(",", 1)[0]:
-        raise HTTPException(422, "Assinatura inválida — envie um PNG do canvas.")
-    try:
-        raw = base64.b64decode(data_url.split(",", 1)[1])
-    except Exception:
-        raise HTTPException(422, "Assinatura inválida.")
-    if len(raw) == 0:
-        raise HTTPException(422, "Assinatura vazia — desenhe antes de salvar.")
-    if len(raw) > ASSINATURA_MAX_BYTES:
-        raise HTTPException(422, "Assinatura maior que 2 MB.")
-    return raw
 
 
 def _path_assinatura(clinica_id: int, tipo: str, entidade_id) -> str:
