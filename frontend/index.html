@@ -224,11 +224,14 @@ let AUTH_IS_SUPERADMIN = false;
 
 /* ── marca (plataforma = neutra, exibida antes do login; clínica = a do usuário logado) ── */
 let PLATAFORMA = { nome: "OdontoDesk", logoUrl: null };
-let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", logoUrl: null };
+let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", cidade: "", chavePix: "", logoUrl: null };
 
 /* ── deep-link da carteirinha (QR) — ?paciente=<id> abre a ficha direto após o login ── */
 let QR_PACIENTE_ALVO = new URLSearchParams(window.location.search).get("paciente") || null;
 if(QR_PACIENTE_ALVO){ history.replaceState(null, "", window.location.pathname); }
+
+/* ── portal público do paciente — ?portal=<token> não passa pela área da equipe nem exige login ── */
+const PORTAL_TOKEN = new URLSearchParams(window.location.search).get("portal") || null;
 
 /* ── API helpers ── */
 /* Evita cliques duplos criando registros repetidos: chamadas de escrita
@@ -307,7 +310,7 @@ async function carregarMinhaClinica(){
     MINHA_CLINICA = {
       nome: c.nome || "", responsavelTecnico: c.responsavelTecnico || "", croResponsavel: c.croResponsavel || "",
       cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
-      email: c.email || "", logoUrl: c.logoUrl || null,
+      email: c.email || "", cidade: c.cidade || "", chavePix: c.chavePix || "", logoUrl: c.logoUrl || null,
     };
     aplicarMarcaSidebar();
   }catch(e){ /* segue com os valores padrão se falhar */ }
@@ -3287,6 +3290,10 @@ function vSettings(){
       <label class="f"><span>WhatsApp</span><input id="cl-whatsapp" value="${esc(MINHA_CLINICA.telefoneWhatsapp)}"></label>
       <label class="f"><span>E-mail da clínica</span><input id="cl-email" value="${esc(MINHA_CLINICA.email)}"></label>
     </div>
+    <div class="grid g2">
+      <label class="f"><span>Cidade</span><input id="cl-cidade" value="${esc(MINHA_CLINICA.cidade)}" placeholder="Para o Pix do portal do paciente"></label>
+      <label class="f"><span>Chave Pix</span><input id="cl-pix" value="${esc(MINHA_CLINICA.chavePix)}" placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"></label>
+    </div>
     <button class="btn sm" onclick="saveClinicaPerfil()">Salvar perfil do consultório</button>
   </div>
   ${AUTH_IS_SUPERADMIN?`
@@ -3363,6 +3370,7 @@ async function saveClinicaPerfil(){
     nome, responsavelTecnico:g("cl-resp").trim(), croResponsavel:g("cl-cro").trim(),
     cnpj:g("cl-cnpj").trim(), enderecoCompleto:g("cl-endereco").trim(),
     telefoneWhatsapp:g("cl-whatsapp").trim(), email:g("cl-email").trim(),
+    cidade:g("cl-cidade").trim(), chavePix:g("cl-pix").trim(),
   });
   await carregarMinhaClinica();
   render();
@@ -3710,7 +3718,72 @@ if("serviceWorker" in navigator){
 }
 
 /* ── inicialização ── */
+/* ════════════════════════════════════════════
+   PORTAL PÚBLICO DO PACIENTE
+   Acessado via QR da carteirinha, protegido só pelo token opaco na URL
+   (nunca o id interno). Sem login, sem acesso a mais nada do sistema —
+   é uma página isolada, o body inteiro é substituído por ela.
+════════════════════════════════════════════ */
+async function renderPortalPaciente(token){
+  document.title = "Portal do Paciente";
+  document.body.innerHTML = `<div id="portal-root" style="max-width:440px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#f8fafc">
+    <div style="text-align:center;padding:60px 0;color:#64748b"><span class="spinner" style="border-color:#0f766e;border-top-color:transparent"></span> Carregando…</div>
+  </div>`;
+  let d;
+  try{
+    const r = await fetch(API + "/portal/" + encodeURIComponent(token));
+    if(!r.ok) throw new Error("not found");
+    d = await r.json();
+  }catch(e){
+    document.getElementById("portal-root").innerHTML = `<div style="text-align:center;padding:60px 20px;color:#64748b">
+      <div style="font-size:40px;margin-bottom:10px">🔒</div>
+      <p>Link inválido. Peça uma nova carteirinha à clínica.</p>
+    </div>`;
+    return;
+  }
+  const money = c => (c/100).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+  const brDate = iso => iso ? iso.split("-").reverse().join("/") : "—";
+  const waNum = (d.clinica.telefoneWhatsapp||"").replace(/\D/g,"");
+  const root = document.getElementById("portal-root");
+  root.innerHTML = `
+    <div style="text-align:center;margin-bottom:20px">
+      <h1 style="font-size:18px;margin:0;color:#0f172a">${esc(d.clinica.nome || "Sua clínica")}</h1>
+      <p style="color:#64748b;font-size:13px;margin:4px 0 0">Olá, ${esc(d.nome.split(" ")[0])}! 👋</p>
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="font-size:12px;color:#64748b;margin-bottom:2px">Próxima consulta</div>
+      <div style="font-size:15px;font-weight:600;color:#0f172a">${d.proximaConsulta ? `${brDate(d.proximaConsulta.data)} às ${d.proximaConsulta.hora}${d.proximaConsulta.profissionalNome?" · "+esc(d.proximaConsulta.profissionalNome):""}` : "Nenhuma agendada"}</div>
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="font-size:12px;color:#64748b;margin-bottom:2px">Última visita</div>
+      <div style="font-size:15px;font-weight:600;color:#0f172a">${brDate(d.ultimaVisita)}</div>
+    </div>
+    ${d.totalAberto>0 ? `
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="font-size:12px;color:#9a3412;margin-bottom:4px">Valores em aberto</div>
+      <div style="font-size:22px;font-weight:700;color:#9a3412;margin-bottom:8px">${money(d.totalAberto)}</div>
+      ${d.lancamentosAbertos.map(l=>`<div style="font-size:12.5px;color:#7c2d12;display:flex;justify-content:space-between;gap:8px;padding:3px 0">
+        <span>${esc(l.descricao||"Cobrança")} — venc. ${brDate(l.vencimento)}</span><span style="white-space:nowrap">${money(l.valor)}</span>
+      </div>`).join("")}
+      ${d.pixCopiaCola ? `<button id="btn-copy-pix" data-pix="${esc(d.pixCopiaCola)}" style="width:100%;margin-top:10px;padding:11px;background:#0f766e;color:#fff;border:none;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer">Copiar código Pix</button>` : ""}
+    </div>` : `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-bottom:12px;text-align:center;color:#166534;font-weight:600;font-size:14px">✓ Sem pendências financeiras</div>
+    `}
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px">
+      <div style="font-size:12px;color:#64748b;margin-bottom:2px">Endereço</div>
+      <div style="font-size:13.5px;color:#0f172a">${esc(d.clinica.endereco) || "—"}</div>
+    </div>
+    ${waNum ? `<a href="https://wa.me/55${waNum}" target="_blank" style="display:block;text-align:center;padding:13px;background:#16a34a;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">💬 Falar com a clínica no WhatsApp</a>` : ""}
+  `;
+  const btnPix = document.getElementById("btn-copy-pix");
+  if(btnPix) btnPix.addEventListener("click", async () => {
+    try{ await navigator.clipboard.writeText(btnPix.dataset.pix); btnPix.textContent = "Copiado! ✓"; }
+    catch(e){ btnPix.textContent = "Não foi possível copiar"; }
+  });
+}
+
 (async function boot(){
+  if(PORTAL_TOKEN){ await renderPortalPaciente(PORTAL_TOKEN); return; }
   const params = new URLSearchParams(window.location.search);
   const verifyToken = params.get("verify");
   if(verifyToken){
