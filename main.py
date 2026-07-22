@@ -6,6 +6,7 @@ Novidades v2.1:
 from __future__ import annotations
 
 import json
+import base64
 import os
 import random
 import secrets
@@ -1219,6 +1220,19 @@ def _sb_signed_url(path: str, segundos: int = 300) -> str:
     return f"{SUPABASE_URL}/storage/v1{r.json()['signedURL']}"
 
 
+def _sb_signed_url_or_none(path: str, segundos: int = 300) -> str | None:
+    """Como _sb_signed_url, mas retorna None em vez de lançar erro quando o
+    objeto não existe. Usado para checar se algo (ex: assinatura) já foi
+    salvo, sem precisar de uma coluna própria no banco pra marcar isso."""
+    r = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/sign/{ANEXO_BUCKET}/{path}",
+        headers=_sb_headers("application/json"), json={"expiresIn": segundos}, timeout=30,
+    )
+    if r.status_code != 200:
+        return None
+    return f"{SUPABASE_URL}/storage/v1{r.json()['signedURL']}"
+
+
 def _sb_delete(path: str):
     requests.delete(
         f"{SUPABASE_URL}/storage/v1/object/{ANEXO_BUCKET}/{path}",
@@ -1449,6 +1463,113 @@ def delete_foto_paciente(pid: str, request: Request):
         db.commit()
     if path:
         _sb_delete(path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ASSINATURAS DIGITAIS  (paciente e profissional; PNG do canvas, no Supabase Storage)
+# ══════════════════════════════════════════════════════════════════════════════
+# Caminho determinístico (um arquivo fixo por paciente/profissional) — dispensa
+# qualquer coluna nova no banco: a existência do arquivo no Storage já diz se a
+# assinatura foi coletada ou não.
+ASSINATURA_MAX_BYTES = 2 * 1024 * 1024  # 2 MB — assinatura é um traço simples, nunca deveria chegar perto disso
+
+
+class AssinaturaIn(BaseModel):
+    dataUrl: str  # data URL do canvas, ex: "data:image/png;base64,iVBORw0KG..."
+
+
+def _decodificar_assinatura(data_url: str) -> bytes:
+    if not data_url or "," not in data_url or "image/png" not in data_url.split(",", 1)[0]:
+        raise HTTPException(422, "Assinatura inválida — envie um PNG do canvas.")
+    try:
+        raw = base64.b64decode(data_url.split(",", 1)[1])
+    except Exception:
+        raise HTTPException(422, "Assinatura inválida.")
+    if len(raw) == 0:
+        raise HTTPException(422, "Assinatura vazia — desenhe antes de salvar.")
+    if len(raw) > ASSINATURA_MAX_BYTES:
+        raise HTTPException(422, "Assinatura maior que 2 MB.")
+    return raw
+
+
+def _path_assinatura(clinica_id: int, tipo: str, entidade_id) -> str:
+    return f"_assinaturas/{clinica_id}/{tipo}/{entidade_id}.png"
+
+
+@app.post("/api/patients/{pid}/assinatura", status_code=201)
+def salvar_assinatura_paciente(pid: str, data: AssinaturaIn, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p or p.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+    raw = _decodificar_assinatura(data.dataUrl)
+    _sb_upload(_path_assinatura(quem.clinicaId, "paciente", pid), raw, "image/png")
+    return {"ok": True}
+
+
+@app.get("/api/patients/{pid}/assinatura/url")
+def get_assinatura_paciente(pid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p or p.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+    url = _sb_signed_url_or_none(_path_assinatura(quem.clinicaId, "paciente", pid), segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
+
+
+@app.delete("/api/patients/{pid}/assinatura", status_code=204)
+def remover_assinatura_paciente(pid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p or p.clinicaId != quem.clinicaId:
+            raise HTTPException(404)
+    _sb_delete(_path_assinatura(quem.clinicaId, "paciente", pid))
+
+
+@app.post("/api/profissionais/{prof_id}/assinatura", status_code=201)
+def salvar_assinatura_profissional(prof_id: int, data: AssinaturaIn, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        prof = db.get(Profissional, prof_id)
+        if not prof or prof.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Profissional não encontrado.")
+    raw = _decodificar_assinatura(data.dataUrl)
+    _sb_upload(_path_assinatura(quem.clinicaId, "profissional", prof_id), raw, "image/png")
+    return {"ok": True}
+
+
+@app.get("/api/profissionais/{prof_id}/assinatura/url")
+def get_assinatura_profissional(prof_id: int, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        prof = db.get(Profissional, prof_id)
+        if not prof or prof.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Profissional não encontrado.")
+    url = _sb_signed_url_or_none(_path_assinatura(quem.clinicaId, "profissional", prof_id), segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
+
+
+@app.delete("/api/profissionais/{prof_id}/assinatura", status_code=204)
+def remover_assinatura_profissional(prof_id: int, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        prof = db.get(Profissional, prof_id)
+        if not prof or prof.clinicaId != quem.clinicaId:
+            raise HTTPException(404)
+    _sb_delete(_path_assinatura(quem.clinicaId, "profissional", prof_id))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
