@@ -205,6 +205,7 @@ let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
 let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
+const ANEXO_THUMB_CACHE = {}; // id do anexo -> URL assinada já carregada (evita refazer a assinatura a cada render)
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let REL_MES = todayISO().slice(0,7);  // mês do relatório por dentista
 let DESP_MES = todayISO().slice(0,7); // mês do painel de gastos
@@ -1475,6 +1476,7 @@ async function openFicha(pid){
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   carregarFotoFicha(pid);
   carregarOdontograma(pid);
+  carregarThumbsAnexos();
   window.scrollTo(0,0);
 }
 async function carregarFotoFicha(pid){
@@ -1744,12 +1746,15 @@ function vFicha(){
       ? `<div style="color:var(--soft);font-size:14px;padding:4px 0 10px">Nenhum arquivo anexado.</div>`
       : FICHA_ANEXOS.map(a=>`
         <div class="row">
-          <div style="font-size:22px;min-width:32px;text-align:center">${ICONE_ANEXO[a.categoria]||"📎"}</div>
+          <div id="thumb-${a.id}" onclick="verAnexo('${a.id}')" style="width:40px;height:40px;min-width:40px;border-radius:8px;overflow:hidden;background:var(--bg-soft,#f1f5f9);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer">
+            ${ANEXO_THUMB_CACHE[a.id] ? `<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">` : (ICONE_ANEXO[a.categoria]||"📎")}
+          </div>
           <div class="grow">
             <div style="font-weight:500;font-size:14px;word-break:break-all">${esc(a.nome)}</div>
             <div class="meta">${CATEGORIAS_ANEXO[a.categoria]||a.categoria} · ${fmtBytes(a.tamanho)} · ${fmtDateTime(a.created_at)}</div>
           </div>
           <button class="btn ghost sm" onclick="verAnexo('${a.id}')">Abrir</button>
+          <button class="icon-btn" onclick="renomearAnexo('${a.id}')" aria-label="Renomear">${IC.pencil}</button>
           <button class="icon-btn del" onclick="delAnexo('${a.id}')" aria-label="Excluir">${IC.trash}</button>
         </div>`).join("")}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
@@ -1822,11 +1827,43 @@ async function uploadAnexo(input){
   const novo = await apiUpload("/anexos", fd);
   FICHA_ANEXOS = [novo, ...FICHA_ANEXOS];
   render();
+  carregarThumbsAnexos();
   toast("Arquivo anexado. 📎");
 }
 async function verAnexo(id){
   const r = await api("GET", `/anexos/${id}/url`);
   window.open(r.url, "_blank");
+}
+async function carregarThumbsAnexos(){
+  // Carrega a miniatura só das imagens (PDF e outros mantêm o ícone da categoria)
+  // e só das que ainda não estão no cache — evita repetir a assinatura da URL
+  // toda vez que a tela é re-renderizada.
+  for(const a of FICHA_ANEXOS){
+    if(!a.mimeType || !a.mimeType.startsWith("image/")) continue;
+    if(ANEXO_THUMB_CACHE[a.id]) continue;
+    try{
+      const r = await api("GET", `/anexos/${a.id}/url`);
+      ANEXO_THUMB_CACHE[a.id] = r.url;
+      const el = document.getElementById(`thumb-${a.id}`);
+      if(el) el.innerHTML = `<img src="${r.url}" style="width:100%;height:100%;object-fit:cover">`;
+    }catch(e){ /* sem preview — mantém o ícone da categoria */ }
+  }
+}
+function renomearAnexo(id){
+  const a = FICHA_ANEXOS.find(x=>x.id===id);
+  if(!a) return;
+  modal("Renomear arquivo", `
+    <label class="f"><span>Nome do arquivo *</span><input id="anexo-novo-nome" value="${esc(a.nome)}"></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="confirmarRenomeioAnexo('${id}')">Salvar</button></div>`);
+}
+async function confirmarRenomeioAnexo(id){
+  const novoNome = document.getElementById("anexo-novo-nome")?.value.trim();
+  if(!novoNome){ toast("Informe um nome para o arquivo."); return; }
+  const atualizado = await api("PUT", `/anexos/${id}`, {nome: novoNome});
+  FICHA_ANEXOS = FICHA_ANEXOS.map(x=>x.id===id?atualizado:x);
+  closeModal(); render();
+  toast("Arquivo renomeado.");
 }
 async function delAnexo(id){
   const a = FICHA_ANEXOS.find(x=>x.id===id);
@@ -1836,6 +1873,7 @@ async function delAnexo(id){
   if(!confirm(aviso)) return;
   await api("DELETE", `/anexos/${id}`);
   FICHA_ANEXOS = FICHA_ANEXOS.filter(x=>x.id!==id);
+  delete ANEXO_THUMB_CACHE[id];
   render(); toast("Anexo excluído.");
 }
 async function migrarNotas(pid){
