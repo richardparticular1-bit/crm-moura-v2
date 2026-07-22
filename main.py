@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Clinica, Config, ConsentimentoMidia, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.8 (multi-tenant: fundação)")
 
@@ -2228,13 +2228,106 @@ def set_orcamento_status(oid: str, data: OrcStatusIn, request: Request):
     quem = _usuario_logado(request)
     if data.status not in ORC_STATUS_VALIDOS:
         raise HTTPException(422, f"Status inválido. Use: {', '.join(sorted(ORC_STATUS_VALIDOS))}")
+    if data.status == "aprovado":
+        raise HTTPException(409, "Aprovação exige assinatura do paciente e do profissional — use o fluxo de aprovação dedicado.")
     with SessionLocal() as db:
         o = db.get(Orcamento, oid)
         if not o or o.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Orçamento não encontrado")
+        if o.status == "aprovado":
+            raise HTTPException(409, "Orçamento já aprovado não pode voltar a rascunho/apresentado/recusado por aqui.")
         o.status = data.status
         db.commit()
         return _orc_row(db, o)
+
+
+class AprovarOrcamentoIn(BaseModel):
+    profissionalId: int
+    assinaturaPaciente: str  # dataUrl base64 PNG
+    assinaturaProfissional: str  # dataUrl base64 PNG
+
+
+@app.post("/api/orcamentos/{oid}/aprovar", status_code=201)
+def aprovar_orcamento(oid: str, data: AprovarOrcamentoIn, request: Request):
+    """Aprova o orçamento E registra a prova de consentimento — rubrica do
+    paciente e do profissional colhidas neste exato momento. É o único
+    caminho que leva um orçamento a 'aprovado'."""
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o or o.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Orçamento não encontrado")
+        if o.status == "aprovado":
+            raise HTTPException(409, "Este orçamento já está aprovado.")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado.")
+        raw_pac = _decodificar_assinatura(data.assinaturaPaciente)
+        raw_prof = _decodificar_assinatura(data.assinaturaProfissional)
+        cid = _new_id()
+        path_pac = f"_consentimentos_orcamento/{quem.clinicaId}/{oid}/{cid}_paciente.png"
+        path_prof = f"_consentimentos_orcamento/{quem.clinicaId}/{oid}/{cid}_profissional.png"
+        _sb_upload(path_pac, raw_pac, "image/png")
+        _sb_upload(path_prof, raw_prof, "image/png")
+        o.status = "aprovado"
+        db.add(ConsentimentoOrcamento(
+            id=cid, clinicaId=quem.clinicaId, orcamentoId=oid, patientId=o.patientId,
+            profissionalId=data.profissionalId,
+            assinaturaPacientePath=path_pac, assinaturaProfissionalPath=path_prof,
+        ))
+        db.commit()
+        return _orc_row(db, o)
+
+
+@app.get("/api/orcamentos/{oid}/consentimento")
+def get_consentimento_orcamento(oid: str, request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        o = db.get(Orcamento, oid)
+        if not o or o.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Orçamento não encontrado")
+        c = (
+            db.query(ConsentimentoOrcamento)
+            .filter(ConsentimentoOrcamento.orcamentoId == oid, ConsentimentoOrcamento.clinicaId == quem.clinicaId)
+            .order_by(ConsentimentoOrcamento.created_at.desc())
+            .first()
+        )
+        if not c:
+            return {"existe": False}
+        prof = db.get(Profissional, c.profissionalId)
+        return {
+            "existe": True, "id": c.id,
+            "profissionalNome": prof.nome if prof else "—",
+            "created_at": c.created_at.isoformat(),
+        }
+
+
+@app.get("/api/consentimentos-orcamento/{cid}/assinatura-paciente/url")
+def get_assinatura_paciente_orcamento(cid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        c = db.get(ConsentimentoOrcamento, cid)
+        if not c or c.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Não encontrado.")
+    url = _sb_signed_url_or_none(c.assinaturaPacientePath, segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
+
+
+@app.get("/api/consentimentos-orcamento/{cid}/assinatura-profissional/url")
+def get_assinatura_profissional_orcamento(cid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        c = db.get(ConsentimentoOrcamento, cid)
+        if not c or c.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Não encontrado.")
+    url = _sb_signed_url_or_none(c.assinaturaProfissionalPath, segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
 
 
 class GerarCobrancasIn(BaseModel):
