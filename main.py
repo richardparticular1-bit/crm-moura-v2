@@ -5,6 +5,7 @@ Novidades v2.1:
 """
 from __future__ import annotations
 
+import io
 import json
 import base64
 import os
@@ -16,11 +17,13 @@ from pathlib import Path
 from typing import Any
 
 import bcrypt
+import qrcode
+import qrcode.image.svg
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
@@ -789,6 +792,23 @@ def delete_patient(pid: str, request: Request):
         db.query(Consulta).filter(Consulta.patientId == pid).delete()
         db.delete(p)
         db.commit()
+
+
+@app.get("/api/patients/{pid}/qrcode.svg")
+def get_patient_qrcode(pid: str, request: Request):
+    """QR da carteirinha: aponta pra um deep-link (?paciente=<id>) que abre
+    a ficha direto quando escaneado por alguém já logado no app — nunca uma
+    página pública, o dado do paciente continua atrás do login normal."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        p = db.get(Paciente, pid)
+        if not p or p.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+    url = f"{APP_URL}/?paciente={pid}"
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
