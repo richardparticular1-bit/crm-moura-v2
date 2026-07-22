@@ -1338,7 +1338,38 @@ ANEXO_MIMES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",
     "application/pdf",
 }
-ANEXO_CATEGORIAS = {"radiografia", "documento", "consentimento", "foto", "outro"}
+ANEXO_CATEGORIAS = {"radiografia", "documento", "consentimento", "foto", "outro", "periapical", "facial", "elemento"}
+
+# Levantamento radiográfico periapical — série completa de 14 películas
+PERIAPICAL_POSICOES = {
+    "sup_incisivos": "Incisivos superiores",
+    "sup_canino_dir": "Canino superior direito",
+    "sup_canino_esq": "Canino superior esquerdo",
+    "sup_pm_dir": "Pré-molares superiores direito",
+    "sup_molar_dir": "Molares superiores direito",
+    "sup_pm_esq": "Pré-molares superiores esquerdo",
+    "sup_molar_esq": "Molares superiores esquerdo",
+    "inf_incisivos": "Incisivos inferiores",
+    "inf_canino_dir": "Canino inferior direito",
+    "inf_canino_esq": "Canino inferior esquerdo",
+    "inf_pm_dir": "Pré-molares inferiores direito",
+    "inf_molar_dir": "Molares inferiores direito",
+    "inf_pm_esq": "Pré-molares inferiores esquerdo",
+    "inf_molar_esq": "Molares inferiores esquerdo",
+}
+
+# Documentação fotográfica facial/intrabucal — 9 posições padrão
+FACIAL_POSICOES = {
+    "frontal_repouso": "Frontal em repouso",
+    "frontal_sorrindo": "Frontal sorrindo",
+    "perfil_direito": "Perfil direito",
+    "perfil_esquerdo": "Perfil esquerdo",
+    "frontal_oclusao": "Frontal em oclusão",
+    "lateral_dir_oclusao": "Lateral direita em oclusão",
+    "lateral_esq_oclusao": "Lateral esquerda em oclusão",
+    "oclusal_superior": "Oclusal superior",
+    "oclusal_inferior": "Oclusal inferior",
+}
 
 
 def _sb_headers(content_type: str | None = None) -> dict:
@@ -1418,11 +1449,32 @@ async def upload_anexo(
     categoria: str = Form("documento"),
     file: UploadFile = File(...),
     origemId: str | None = Form(None),
+    dente: str | None = Form(None),
+    face: str | None = Form(None),
+    posicao: str | None = Form(None),
 ):
     quem = _usuario_logado(request)
     _sb_configurado()
     if categoria not in ANEXO_CATEGORIAS:
         categoria = "outro"
+    # cada categoria de imagem clínica tem sua própria localização obrigatória —
+    # fora dela, dente/face/posicao são descartados (não fazem sentido lá)
+    if categoria == "periapical":
+        if posicao not in PERIAPICAL_POSICOES:
+            raise HTTPException(422, "Posição inválida na série periapical.")
+        dente = None; face = None
+    elif categoria == "facial":
+        if posicao not in FACIAL_POSICOES:
+            raise HTTPException(422, "Posição inválida na documentação facial.")
+        dente = None; face = None
+    elif categoria == "elemento":
+        if dente not in DENTES_VALIDOS:
+            raise HTTPException(422, "Número de dente inválido.")
+        if face and face not in FACES_VALIDAS:
+            raise HTTPException(422, "Face inválida.")
+        face = face or "dente"; posicao = None
+    else:
+        dente = None; face = None; posicao = None
     mime = (file.content_type or "").lower()
     if mime not in ANEXO_MIMES:
         raise HTTPException(422, "Tipo de arquivo não permitido. Use imagens (JPG, PNG, WEBP, GIF) ou PDF.")
@@ -1444,7 +1496,8 @@ async def upload_anexo(
         path = f"{quem.clinicaId}/{patientId}/{aid}_{nome}"
         _sb_upload(path, conteudo, mime)
         a = Anexo(id=aid, clinicaId=quem.clinicaId, patientId=patientId, categoria=categoria, nome=file.filename or nome,
-                  mimeType=mime, tamanho=len(conteudo), storagePath=path, origemId=origemId or None)
+                  mimeType=mime, tamanho=len(conteudo), storagePath=path, origemId=origemId or None,
+                  dente=dente, face=face, posicao=posicao)
         db.add(a)
         db.commit()
         return {**_row(a), "created_at": a.created_at.isoformat()}
