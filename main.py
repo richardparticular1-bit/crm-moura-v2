@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Clinica, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Clinica, Config, ConsentimentoMidia, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.8 (multi-tenant: fundação)")
 
@@ -734,11 +734,27 @@ def list_patients(request: Request):
         return [_row(p) for p in db.query(Paciente).filter(Paciente.clinicaId == quem.clinicaId).order_by(Paciente.name).all()]
 
 
+def _prontuario_duplicado(db, clinica_id: int, num_prontuario: str, exclude_id: str | None = None) -> Paciente | None:
+    """Retorna o paciente que já usa esse número de prontuário na mesma
+    clínica, ou None se estiver livre. Número vazio nunca é considerado
+    duplicado — "ainda não atribuído" é um estado válido."""
+    num = (num_prontuario or "").strip()
+    if not num:
+        return None
+    q = db.query(Paciente).filter(Paciente.clinicaId == clinica_id, Paciente.numProntuario == num)
+    if exclude_id:
+        q = q.filter(Paciente.id != exclude_id)
+    return q.first()
+
+
 @app.post("/api/patients", status_code=201)
 def create_patient(data: PacienteIn, request: Request):
     quem = _usuario_logado(request)
     pid = data.id or _new_id()
     with SessionLocal() as db:
+        dup = _prontuario_duplicado(db, quem.clinicaId, data.numProntuario)
+        if dup:
+            raise HTTPException(409, f"Número de prontuário já usado por {dup.name}.")
         p = Paciente(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=pid, clinicaId=quem.clinicaId)
         db.add(p)
         db.commit()
@@ -753,6 +769,9 @@ def update_patient(pid: str, data: PacienteIn, request: Request):
         p = db.get(Paciente, pid)
         if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        dup = _prontuario_duplicado(db, quem.clinicaId, data.numProntuario, exclude_id=pid)
+        if dup:
+            raise HTTPException(409, f"Número de prontuário já usado por {dup.name}.")
         for k, v in data.model_dump(exclude={"id"}).items():
             setattr(p, k, v)
         db.commit()
@@ -1875,6 +1894,113 @@ def get_odontograma(patient_id: str, request: Request, ate: str | None = None):
                 "created_at": m.created_at.isoformat(),
             })
         return {"estado": estado, "historico": historico, "datasDisponiveis": datas_disponiveis}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONSENTIMENTO DE MÍDIA E DIVULGAÇÃO  (granular, indeterminado, registro imutável)
+# ══════════════════════════════════════════════════════════════════════════════
+# Cada tipo é uma autorização independente — LGPD pede consentimento
+# específico por finalidade, não um "aceito tudo" genérico. Vale por prazo
+# indeterminado; revogar não apaga nem edita nada, só soma um evento novo.
+TIPOS_CONSENTIMENTO_MIDIA = {
+    "fotos_video": "Fotos e vídeos clínicos, armazenados no prontuário",
+    "radiografias": "Radiografias, armazenadas no prontuário",
+    "divulgacao_cientifica": "Uso do caso para divulgação científica/educacional, sem identificação nominal",
+    "divulgacao_procedimento": "Uso de imagem mostrando só o procedimento, sem mostrar rosto/identificação",
+    "divulgacao_identificado": "Uso de imagem com identificação plena (rosto e nome), para divulgação/marketing",
+}
+
+
+class ConsentimentoMidiaIn(BaseModel):
+    patientId: str
+    profissionalId: int
+    autorizados: list[str]  # tipos que devem ficar "autorizado"; os demais tipos válidos ficam "revogado"
+    dataUrl: str            # assinatura/rubrica do paciente, PNG em base64
+
+
+def _estado_consentimentos(rows: list) -> dict[str, str]:
+    estado: dict[str, str] = {}
+    for r in rows:  # rows já em ordem cronológica — a última de cada tipo vence
+        estado[r.tipo] = r.status
+    return estado
+
+
+@app.get("/api/consentimentos")
+def get_consentimentos(patient_id: str, request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        pac = db.get(Paciente, patient_id)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        rows = (
+            db.query(ConsentimentoMidia)
+            .filter(ConsentimentoMidia.patientId == patient_id, ConsentimentoMidia.clinicaId == quem.clinicaId)
+            .order_by(ConsentimentoMidia.created_at.asc())
+            .all()
+        )
+        estado = _estado_consentimentos(rows)
+        profs = {p.id: p for p in db.query(Profissional).filter(Profissional.clinicaId == quem.clinicaId).all()}
+        historico = []
+        for r in reversed(rows):
+            prof = profs.get(r.profissionalId)
+            historico.append({
+                "id": r.id, "tipo": r.tipo, "status": r.status,
+                "profissionalNome": prof.nome if prof else "—",
+                "created_at": r.created_at.isoformat(),
+            })
+        return {"estado": estado, "historico": historico, "tipos": TIPOS_CONSENTIMENTO_MIDIA}
+
+
+@app.post("/api/consentimentos", status_code=201)
+def salvar_consentimentos(data: ConsentimentoMidiaIn, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    autorizados = set(data.autorizados) & set(TIPOS_CONSENTIMENTO_MIDIA.keys())
+    with SessionLocal() as db:
+        pac = db.get(Paciente, data.patientId)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado.")
+        rows = (
+            db.query(ConsentimentoMidia)
+            .filter(ConsentimentoMidia.patientId == data.patientId, ConsentimentoMidia.clinicaId == quem.clinicaId)
+            .order_by(ConsentimentoMidia.created_at.asc())
+            .all()
+        )
+        estado_atual = _estado_consentimentos(rows)
+        mudancas = []
+        for tipo in TIPOS_CONSENTIMENTO_MIDIA:
+            novo_status = "autorizado" if tipo in autorizados else "revogado"
+            if estado_atual.get(tipo) != novo_status:
+                mudancas.append((tipo, novo_status))
+        if not mudancas:
+            return {"ok": True, "alterado": False}
+        raw = _decodificar_assinatura(data.dataUrl)
+        evento_id = _new_id()
+        path = f"_consentimentos/{quem.clinicaId}/{data.patientId}/{evento_id}.png"
+        _sb_upload(path, raw, "image/png")
+        for tipo, novo_status in mudancas:
+            db.add(ConsentimentoMidia(
+                id=_new_id(), clinicaId=quem.clinicaId, patientId=data.patientId,
+                tipo=tipo, status=novo_status, assinaturaPath=path, profissionalId=data.profissionalId,
+            ))
+        db.commit()
+        return {"ok": True, "alterado": True}
+
+
+@app.get("/api/consentimentos/{cid}/assinatura/url")
+def get_assinatura_consentimento(cid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        c = db.get(ConsentimentoMidia, cid)
+        if not c or c.clinicaId != quem.clinicaId or not c.assinaturaPath:
+            raise HTTPException(404, "Sem assinatura.")
+    url = _sb_signed_url_or_none(c.assinaturaPath, segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
