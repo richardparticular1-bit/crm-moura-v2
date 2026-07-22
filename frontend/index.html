@@ -435,6 +435,7 @@ function render(){
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
+  if(TAB==="profissionais") DB.profissionais.forEach(p=>{ if(!ASSINATURA_PROF_CACHE[p.id]) carregarAssinaturaProfissional(p.id); });
 }
 
 /* ════════════════════════════════════════════
@@ -1477,6 +1478,7 @@ async function openFicha(pid){
   carregarFotoFicha(pid);
   carregarOdontograma(pid);
   carregarThumbsAnexos();
+  carregarAssinaturaPaciente(pid);
   window.scrollTo(0,0);
 }
 async function carregarFotoFicha(pid){
@@ -1519,6 +1521,11 @@ async function gerarAnamnese(pid){
       odontoHTML = `<div style="margin-bottom:10px">${svgs.permanentes}${temDecid?svgs.decid:""}</div>${odontoLegenda()}`;
     }
   }catch(e){ /* segue sem odontograma se a chamada falhar */ }
+  let assinaturaPacienteHTML = "";
+  try{
+    const asn = await api("GET", `/patients/${encodeURIComponent(pid)}/assinatura/url`);
+    if(asn && asn.url) assinaturaPacienteHTML = `<img src="${asn.url}" style="max-height:70px;display:block;margin:0 auto">`;
+  }catch(e){ /* sem assinatura coletada ainda — mantém a linha em branco pra assinar na mão */ }
   const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : "";
   const menor = idade !== "" && idade < 18;
   const linha = (v) => v ? esc(v) : "";
@@ -1545,13 +1552,21 @@ async function gerarAnamnese(pid){
     .sig .line{border-top:1px solid #333;width:320px;margin:0 auto 4px}
     .odonto-box{border:1px solid #999;min-height:170px;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#999;font-size:11px;margin-bottom:10px}
     .noprint{margin-bottom:14px}
-    @media print{ .noprint{display:none} body{filter:grayscale(1)} }
-    body.force-gray{filter:grayscale(1)}
-  </style></head><body>
-  <div class="noprint" style="display:flex;gap:8px;align-items:center">
+    @media print{ .noprint{display:none} body.mode-gray{filter:grayscale(1)} body.mode-allblack{filter:grayscale(1) contrast(1000%)} }
+    body.preview.mode-gray{filter:grayscale(1)}
+    body.preview.mode-allblack{filter:grayscale(1) contrast(1000%)}
+  </style></head><body class="mode-gray">
+  <div class="noprint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
-    <button onclick="document.body.classList.toggle('force-gray')" style="padding:8px 16px;background:#fff;color:#334155;border:1px solid #ccc;border-radius:6px;font-size:14px;cursor:pointer">🖤 Pré-visualizar em P&B</button>
-    <span style="font-size:12px;color:#888">A impressão sempre sai em escala de cinza, mesmo em impressora colorida.</span>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#334155">
+      Modo:
+      <select onchange="document.body.classList.remove('mode-gray','mode-allblack');document.body.classList.add(this.value)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+        <option value="mode-gray" selected>Escala de cinza</option>
+        <option value="mode-allblack">Preto e branco (alto contraste)</option>
+      </select>
+    </label>
+    <button onclick="document.body.classList.toggle('preview')" style="padding:8px 16px;background:#fff;color:#334155;border:1px solid #ccc;border-radius:6px;font-size:14px;cursor:pointer">🖤 Pré-visualizar</button>
+    <span style="font-size:12px;color:#888">A impressão sempre sai no modo selecionado, mesmo em impressora colorida.</span>
   </div>
 
   <div class="hd">
@@ -1615,7 +1630,7 @@ async function gerarAnamnese(pid){
 
   <p style="margin-top:16px;font-size:11.5px">Declaro que as informações acima prestadas são totalmente verdadeiras.</p>
   <p style="font-size:11.5px">Irati, ____ de ________________ de ${new Date().getFullYear()}.</p>
-  <div class="sig"><div class="line"></div>Assinatura do Paciente ou seu Responsável Legal</div>
+  <div class="sig">${assinaturaPacienteHTML}<div class="line"></div>Assinatura do Paciente ou seu Responsável Legal</div>
 
   <div style="page-break-before:always"></div>
   <div class="hd" style="border-bottom:none;margin-bottom:6px;padding-bottom:0">
@@ -1767,6 +1782,15 @@ function vFicha(){
     </div>
   </div>
 
+  <div class="card" style="margin-bottom:12px">
+    <h2>Assinatura do Paciente</h2>
+    <div id="assinatura-paciente-box" style="border:1px solid var(--line);border-radius:8px;min-height:88px;display:flex;align-items:center;justify-content:center;background:#f8fafc;margin-bottom:8px;padding:6px">
+      <span class="meta">${ASSINATURA_PACIENTE_CACHE[p.id]?"":"Nenhuma assinatura registrada."}</span>
+      ${ASSINATURA_PACIENTE_CACHE[p.id]?`<img src="${ASSINATURA_PACIENTE_CACHE[p.id]}" style="max-height:80px;object-fit:contain">`:""}
+    </div>
+    <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${p.id}','${esc(p.name)}')">✍️ Coletar assinatura</button>
+  </div>
+
   ${vOdontogramaSection(p)}
 
   <div class="grid g2" style="gap:12px;align-items:start">
@@ -1876,6 +1900,97 @@ async function delAnexo(id){
   delete ANEXO_THUMB_CACHE[id];
   render(); toast("Anexo excluído.");
 }
+
+/* ════════════════════════════════════════════
+   ASSINATURA DIGITAL (canvas — pacientes e profissionais)
+════════════════════════════════════════════ */
+const ASSINATURA_PACIENTE_CACHE = {};    // patientId -> URL assinada já carregada
+const ASSINATURA_PROF_CACHE = {};        // profissionalId -> URL assinada já carregada
+let SIGPAD_CTX = null, SIGPAD_HASDATA = false;
+
+function abrirAssinaturaModal(tipo, id, nomeExibicao){
+  // tipo: "paciente" | "profissional"
+  modal(`Assinatura — ${esc(nomeExibicao)}`, `
+    <div style="border:1px solid #cbd5e1;border-radius:8px;background:#fff">
+      <canvas id="sig-canvas" width="440" height="180" style="width:100%;height:180px;display:block;cursor:crosshair;touch-action:none"></canvas>
+    </div>
+    <div class="meta" style="margin:6px 0">Assine com o dedo (touch) ou o mouse, dentro do quadro acima.</div>
+    <div class="acts">
+      <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="salvarAssinaturaCanvas('${tipo}','${id}')">Salvar assinatura</button>
+    </div>`);
+  initAssinaturaCanvas();
+}
+function initAssinaturaCanvas(){
+  const canvas = document.getElementById("sig-canvas");
+  if(!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * 2; canvas.height = rect.height * 2; // resolução maior evita traço serrilhado
+  const ctx = canvas.getContext("2d");
+  ctx.scale(2, 2);
+  ctx.lineWidth = 2.2; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#1e293b";
+  SIGPAD_CTX = ctx; SIGPAD_HASDATA = false;
+  let drawing = false, last = null;
+  const pos = (e) => {
+    const r = canvas.getBoundingClientRect();
+    const cx = (e.touches ? e.touches[0].clientX : e.clientX) - r.left;
+    const cy = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    return {x: cx, y: cy};
+  };
+  const start = (e) => { drawing = true; SIGPAD_HASDATA = true; last = pos(e); e.preventDefault(); };
+  const move = (e) => {
+    if(!drawing) return;
+    const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    last = p; e.preventDefault();
+  };
+  const end = () => { drawing = false; };
+  canvas.addEventListener("mousedown", start);
+  canvas.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", end);
+  canvas.addEventListener("touchstart", start, {passive: false});
+  canvas.addEventListener("touchmove", move, {passive: false});
+  canvas.addEventListener("touchend", end);
+}
+function limparAssinaturaCanvas(){
+  const canvas = document.getElementById("sig-canvas");
+  if(!canvas || !SIGPAD_CTX) return;
+  SIGPAD_CTX.clearRect(0, 0, canvas.width, canvas.height);
+  SIGPAD_HASDATA = false;
+}
+async function salvarAssinaturaCanvas(tipo, id){
+  const canvas = document.getElementById("sig-canvas");
+  if(!canvas || !SIGPAD_HASDATA){ toast("Desenhe a assinatura antes de salvar."); return; }
+  const dataUrl = canvas.toDataURL("image/png");
+  const endpoint = tipo === "paciente" ? `/patients/${id}/assinatura` : `/profissionais/${id}/assinatura`;
+  await api("POST", endpoint, {dataUrl});
+  closeModal();
+  toast("Assinatura salva. ✍️");
+  if(tipo === "paciente"){ delete ASSINATURA_PACIENTE_CACHE[id]; carregarAssinaturaPaciente(id); }
+  else { delete ASSINATURA_PROF_CACHE[id]; carregarAssinaturaProfissional(id); }
+}
+async function carregarAssinaturaPaciente(pid){
+  const box = document.getElementById("assinatura-paciente-box");
+  if(!box) return;
+  try{
+    const r = await api("GET", `/patients/${pid}/assinatura/url`);
+    ASSINATURA_PACIENTE_CACHE[pid] = r.url;
+    if(FICHA_ID === pid){
+      const box2 = document.getElementById("assinatura-paciente-box");
+      if(box2) box2.innerHTML = `<img src="${r.url}" style="max-height:80px;object-fit:contain">`;
+    }
+  }catch(e){ /* sem assinatura ainda — mantém o placeholder */ }
+}
+async function carregarAssinaturaProfissional(id){
+  try{
+    const r = await api("GET", `/profissionais/${id}/assinatura/url`);
+    ASSINATURA_PROF_CACHE[id] = r.url;
+    const el = document.getElementById(`prof-sig-${id}`);
+    if(el) el.innerHTML = `<img src="${r.url}" style="width:100%;height:100%;object-fit:contain;background:#fff">`;
+  }catch(e){ /* sem assinatura ainda — mantém o ícone */ }
+}
+
 async function migrarNotas(pid){
   const p = pById(pid); if(!p || !p.notes?.trim()) return;
   const profSel = document.getElementById("e-prof");
@@ -2228,6 +2343,9 @@ function vProfissionais(){
       <div class="grow">
         <div style="font-weight:500;font-size:14px">${esc(p.nome)} ${!p.ativo?'<span class="pill" style="background:#f1f5f9;color:#94a3b8;border-color:#e2e8f0">Inativo</span>':""}</div>
         <div class="meta">${esc(p.especialidade)||"Sem especialidade"}${p.cro?" · CRO "+esc(p.cro):""}${p.email?" · "+esc(p.email):""}</div>
+      </div>
+      <div id="prof-sig-${p.id}" onclick="abrirAssinaturaModal('profissional','${p.id}','${esc(p.nome)}')" title="Assinatura digital" style="width:40px;height:32px;border:1px solid var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;background:#f8fafc">
+        ${ASSINATURA_PROF_CACHE[p.id]?`<img src="${ASSINATURA_PROF_CACHE[p.id]}" style="width:100%;height:100%;object-fit:contain;background:#fff">`:"✍️"}
       </div>
       <div class="prof-dot" style="background:${p.cor};width:14px;height:14px;border-radius:50%"></div>
       <button class="icon-btn" onclick="openProfForm(${p.id})">${IC.pencil}</button>
