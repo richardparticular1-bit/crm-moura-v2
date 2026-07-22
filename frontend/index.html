@@ -1453,6 +1453,7 @@ function odontoLegenda(){
 }
 
 let FICHA_ODONTO = { estado:{}, historico:[], datasDisponiveis:[] };
+let FICHA_CONSENTIMENTOS = { estado:{}, historico:[], tipos:{} };
 let ODONTO_DECID_VISIVEL = false;
 let ODONTO_DATA_VIEW = null; // null = estado atual (editável); senão, "YYYY-MM-DD" sendo visualizado (somente leitura)
 
@@ -1681,6 +1682,7 @@ async function openFicha(pid){
   FICHA_ANEXOS = [];
   FICHA_ODONTO = { estado:{}, historico:[], datasDisponiveis:[] };
   ODONTO_DATA_VIEW = null;
+  FICHA_CONSENTIMENTOS = { estado:{}, historico:[], tipos:{} };
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
   const [ev, ax, ret] = await Promise.all([
@@ -1694,6 +1696,7 @@ async function openFicha(pid){
   carregarOdontograma(pid);
   carregarThumbsAnexos();
   carregarAssinaturaPaciente(pid);
+  carregarConsentimentos(pid);
   window.scrollTo(0,0);
 }
 async function carregarFotoFicha(pid){
@@ -2007,6 +2010,8 @@ function vFicha(){
     </div>
     <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${p.id}','${esc(p.name)}')">✍️ Coletar assinatura</button>
   </div>
+
+  ${vConsentimentoSection(p)}
 
   ${vOdontogramaSection(p)}
 
@@ -2505,6 +2510,100 @@ async function editorSalvarCopia(){
   render();
   carregarThumbsAnexos();
   toast("Cópia editada salva. ✏️");
+}
+
+/* ════════════════════════════════════════════
+   CONSENTIMENTO DE MÍDIA E DIVULGAÇÃO
+   Cada tipo (fotos, radiografias, divulgação científica, com/sem
+   identificação) é uma autorização independente, vale por prazo
+   indeterminado. Desmarcar um tipo já autorizado revoga — mas isso NUNCA
+   edita o registro anterior, só soma um evento novo (mesmo princípio do
+   odontograma); o histórico completo fica sempre disponível.
+════════════════════════════════════════════ */
+async function carregarConsentimentos(pid){
+  FICHA_CONSENTIMENTOS = await api("GET", `/consentimentos?patient_id=${encodeURIComponent(pid)}`);
+  if(TAB==="ficha" && FICHA_ID===pid) render();
+}
+function vConsentimentoSection(p){
+  const est = FICHA_CONSENTIMENTOS.estado || {};
+  const tipos = FICHA_CONSENTIMENTOS.tipos || {};
+  const hist = FICHA_CONSENTIMENTOS.historico || [];
+  const chaves = Object.keys(tipos);
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">✍️ Consentimento de Mídia e Divulgação</h2>
+      <button class="btn ghost sm" onclick="abrirConsentimentoModal('${p.id}')">Atualizar consentimento</button>
+    </div>
+    ${chaves.length===0 ? `<p class="meta">Carregando…</p>` : `
+    <div style="display:flex;flex-direction:column;gap:2px">
+      ${chaves.map(k=>{
+        const status = est[k];
+        const cor = status==="autorizado" ? "#16a34a" : status==="revogado" ? "#dc2626" : "#94a3b8";
+        const texto = status==="autorizado" ? "Autorizado" : status==="revogado" ? "Revogado" : "Nunca definido";
+        return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px solid #f1f5f9">
+          <span>${esc(tipos[k])}</span><span style="color:${cor};font-weight:600;white-space:nowrap">${texto}</span>
+        </div>`;
+      }).join("")}
+    </div>`}
+    ${hist.length ? `<details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:12px;font-weight:600;color:#475569">Histórico de consentimentos (${hist.length})</summary>
+      <div style="margin-top:8px;max-height:220px;overflow-y:auto">
+        ${hist.map(h=>`<div class="row" style="padding:6px 0">
+          <div class="grow">
+            <div style="font-size:12.5px">${esc(tipos[h.tipo]||h.tipo)} — <b style="color:${h.status==='autorizado'?'#16a34a':'#dc2626'}">${h.status==='autorizado'?'autorizado':'revogado'}</b></div>
+            <div class="meta">${esc(h.profissionalNome)} · ${fmtDateTime(h.created_at)} · <a href="#" onclick="verAssinaturaConsentimento('${h.id}');return false" style="color:var(--teal-700);font-weight:600">ver assinatura</a></div>
+          </div>
+        </div>`).join("")}
+      </div>
+    </details>` : ""}
+  </div>`;
+}
+function abrirConsentimentoModal(pid){
+  const est = FICHA_CONSENTIMENTOS.estado || {};
+  const tipos = FICHA_CONSENTIMENTOS.tipos || {};
+  const profs = DB.profissionais.filter(p=>p.ativo);
+  modal("Consentimento de Mídia e Divulgação", `
+    <p class="meta" style="margin-bottom:10px">Marque as autorizações válidas a partir de agora. Desmarcar uma que já estava autorizada revoga — vale por prazo indeterminado até então.</p>
+    ${Object.entries(tipos).map(([k,label])=>`
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:13.5px;cursor:pointer">
+        <input type="checkbox" id="cons-${k}" ${est[k]==="autorizado"?"checked":""} style="width:auto">
+        ${esc(label)}
+      </label>`).join("")}
+    <label class="f"><span>Profissional que colheu o consentimento</span>
+      <select id="cons-prof">${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select>
+    </label>
+    <div style="border:1px solid #cbd5e1;border-radius:8px;background:#fff;margin-top:8px">
+      <canvas id="sig-canvas" width="440" height="140" style="width:100%;height:140px;display:block;cursor:crosshair;touch-action:none"></canvas>
+    </div>
+    <div class="meta" style="margin:6px 0">Assinatura ou rubrica do paciente confirmando essas autorizações.</div>
+    <div class="acts">
+      <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="salvarConsentimentoMidia('${pid}')">Salvar</button>
+    </div>`);
+  initAssinaturaCanvas();
+}
+async function salvarConsentimentoMidia(pid){
+  const canvas = document.getElementById("sig-canvas");
+  if(!canvas || !SIGPAD_HASDATA){ toast("Colha a assinatura/rubrica antes de salvar."); return; }
+  const profSel = document.getElementById("cons-prof");
+  if(!profSel || !profSel.value){ toast("Selecione o profissional."); return; }
+  const profissionalId = parseInt(profSel.value);
+  const tipos = Object.keys(FICHA_CONSENTIMENTOS.tipos || {});
+  const autorizados = tipos.filter(k => document.getElementById(`cons-${k}`)?.checked);
+  const dataUrl = canvas.toDataURL("image/png");
+  try{
+    const r = await api("POST", "/consentimentos", {patientId: pid, profissionalId, autorizados, dataUrl});
+    closeModal();
+    await carregarConsentimentos(pid);
+    toast(r.alterado ? "Consentimento atualizado. ✍️" : "Nenhuma mudança — já estava assim.");
+  }catch(e){ /* toast já exibido pelo api() */ }
+}
+async function verAssinaturaConsentimento(id){
+  try{
+    const r = await api("GET", `/consentimentos/${id}/assinatura/url`);
+    window.open(r.url, "_blank");
+  }catch(e){ /* toast já exibido pelo api() */ }
 }
 
 async function migrarNotas(pid){
