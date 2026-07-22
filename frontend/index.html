@@ -368,8 +368,37 @@ async function apiUpload(path, formData) {
   return r.json();
 }
 const fmtBytes = b => b>=1048576 ? (b/1048576).toFixed(1)+" MB" : b>=1024 ? Math.round(b/1024)+" KB" : b+" B";
-const CATEGORIAS_ANEXO = { radiografia:"Radiografia", documento:"Documento", consentimento:"Consentimento", foto:"Foto", outro:"Outro" };
-const ICONE_ANEXO = { radiografia:"🦷", documento:"📄", consentimento:"✍️", foto:"📷", outro:"📎" };
+const CATEGORIAS_ANEXO = { radiografia:"Radiografia", documento:"Documento", consentimento:"Consentimento", foto:"Foto", outro:"Outro", periapical:"Periapical", facial:"Facial/Intrabucal", elemento:"Foto por elemento" };
+const ICONE_ANEXO = { radiografia:"🦷", documento:"📄", consentimento:"✍️", foto:"📷", outro:"📎", periapical:"🦷", facial:"🙂", elemento:"🦷" };
+// Série radiográfica periapical completa — 14 películas
+const PERIAPICAL_POSICOES = [
+  {k:"sup_incisivos", label:"Incisivos superiores"},
+  {k:"sup_canino_dir", label:"Canino superior direito"},
+  {k:"sup_canino_esq", label:"Canino superior esquerdo"},
+  {k:"sup_pm_dir", label:"Pré-molares sup. direito"},
+  {k:"sup_molar_dir", label:"Molares sup. direito"},
+  {k:"sup_pm_esq", label:"Pré-molares sup. esquerdo"},
+  {k:"sup_molar_esq", label:"Molares sup. esquerdo"},
+  {k:"inf_incisivos", label:"Incisivos inferiores"},
+  {k:"inf_canino_dir", label:"Canino inferior direito"},
+  {k:"inf_canino_esq", label:"Canino inferior esquerdo"},
+  {k:"inf_pm_dir", label:"Pré-molares inf. direito"},
+  {k:"inf_molar_dir", label:"Molares inf. direito"},
+  {k:"inf_pm_esq", label:"Pré-molares inf. esquerdo"},
+  {k:"inf_molar_esq", label:"Molares inf. esquerdo"},
+];
+// Documentação fotográfica facial/intrabucal — 9 posições padrão
+const FACIAL_POSICOES = [
+  {k:"frontal_repouso", label:"Frontal em repouso"},
+  {k:"frontal_sorrindo", label:"Frontal sorrindo"},
+  {k:"perfil_direito", label:"Perfil direito"},
+  {k:"perfil_esquerdo", label:"Perfil esquerdo"},
+  {k:"frontal_oclusao", label:"Frontal em oclusão"},
+  {k:"lateral_dir_oclusao", label:"Lateral direita em oclusão"},
+  {k:"lateral_esq_oclusao", label:"Lateral esquerda em oclusão"},
+  {k:"oclusal_superior", label:"Oclusal superior"},
+  {k:"oclusal_inferior", label:"Oclusal inferior"},
+];
 
 /* ── utilidades ── */
 const PROCEDURES = ["Avaliação","Limpeza","Restauração","Canal","Extração","Clareamento","Ortodontia","Implante","Prótese","Outro"];
@@ -1480,6 +1509,134 @@ function vOdontogramaSection(p){
     </details>`:""}
   </div>`;
 }
+/* ════════════════════════════════════════════
+   LEVANTAMENTOS FOTOGRÁFICOS — grades de posição fixa (periapical/facial)
+   e fotos avulsas por elemento dentário. Tudo é Anexo por baixo dos panos
+   (categoria "periapical" | "facial" | "elemento"); a grade só mostra o
+   slot quando existe imagem enviada pra aquela posição — se reenviar pra
+   uma posição já preenchida, o registro antigo não é apagado (mesmo
+   princípio do odontograma: histórico preservado, só o mais recente é
+   exibido).
+════════════════════════════════════════════ */
+function _latestPorChave(lista, categoria, chaveFn){
+  const mapa = {};
+  for(const a of lista){
+    if(a.categoria !== categoria) continue;
+    const k = chaveFn(a);
+    if(!mapa[k] || a.created_at > mapa[k].created_at) mapa[k] = a;
+  }
+  return mapa;
+}
+function _renderGradeSlots(pid, posicoes, mapa, categoria){
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:10px">
+    ${posicoes.map(p=>{
+      const a = mapa[p.k];
+      const thumb = a ? (ANEXO_THUMB_CACHE[a.id] ? `<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">` : `<span style="font-size:20px">${ICONE_ANEXO[categoria]}</span>`) : `<span style="font-size:24px;color:#cbd5e1">+</span>`;
+      return `<div style="text-align:center">
+        <div onclick="${a?`verAnexo('${a.id}')`:`clickSlotAnexo('${pid}','${categoria}','${p.k}')`}" style="aspect-ratio:1;border:1.5px dashed ${a?"var(--line)":"#94a3b8"};border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#f8fafc">${thumb}</div>
+        <div class="meta" style="font-size:10.5px;margin-top:3px;line-height:1.25">${p.label}</div>
+        ${a?`<button class="icon-btn" style="transform:scale(.75)" onclick="clickSlotAnexo('${pid}','${categoria}','${p.k}')" aria-label="Substituir">${IC.pencil}</button>`:""}
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+function vPeriapicalSection(pid){
+  const mapa = _latestPorChave(FICHA_ANEXOS, "periapical", a=>a.posicao);
+  const preenchidas = Object.keys(mapa).length;
+  return `<div class="card" style="margin-bottom:12px">
+    <h2>🦷 Levantamento Radiográfico Periapical ${preenchidas?`(${preenchidas}/14)`:""}</h2>
+    <p class="meta" style="margin-bottom:10px">Clique num quadro pra anexar a radiografia daquela posição.</p>
+    ${_renderGradeSlots(pid, PERIAPICAL_POSICOES, mapa, "periapical")}
+  </div>`;
+}
+function vFacialSection(pid){
+  const mapa = _latestPorChave(FICHA_ANEXOS, "facial", a=>a.posicao);
+  const preenchidas = Object.keys(mapa).length;
+  return `<div class="card" style="margin-bottom:12px">
+    <h2>🙂 Documentação Fotográfica Facial/Intrabucal ${preenchidas?`(${preenchidas}/9)`:""}</h2>
+    <p class="meta" style="margin-bottom:10px">Clique num quadro pra anexar a foto daquela posição.</p>
+    ${_renderGradeSlots(pid, FACIAL_POSICOES, mapa, "facial")}
+  </div>`;
+}
+function vElementoSection(pid){
+  const fotos = FICHA_ANEXOS.filter(a=>a.categoria==="elemento");
+  const porDente = {};
+  for(const a of fotos){
+    porDente[a.dente] = porDente[a.dente] || {};
+    const chave = a.face || "dente";
+    if(!porDente[a.dente][chave] || a.created_at > porDente[a.dente][chave].created_at) porDente[a.dente][chave] = a;
+  }
+  const dentes = Object.keys(porDente).sort((a,b)=>(+a)-(+b));
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">Fotos por Elemento</h2>
+      <button class="btn ghost sm" onclick="abrirUploadElemento('${pid}')">+ Adicionar</button>
+    </div>
+    ${dentes.length===0 ? `<p class="meta">Nenhuma foto por elemento ainda — 11, 12, 13... com ou sem face específica.</p>` :
+    dentes.map(d=>`
+      <div style="margin-bottom:12px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px">Dente ${esc(d)}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${Object.entries(porDente[d]).map(([face,a])=>`
+            <div style="text-align:center;width:74px">
+              <div onclick="verAnexo('${a.id}')" style="width:74px;height:74px;border-radius:8px;overflow:hidden;cursor:pointer;background:#f8fafc;border:1px solid var(--line)">
+                ${ANEXO_THUMB_CACHE[a.id]?`<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">`:`<span style="font-size:18px">🦷</span>`}
+              </div>
+              <div class="meta" style="font-size:10px">${face==="dente"?"Inteiro":(FACE_LABEL[face]||face)}</div>
+            </div>`).join("")}
+        </div>
+      </div>`).join("")}
+  </div>`;
+}
+function clickSlotAnexo(pid, categoria, posicao){
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = "image/*";
+  input.onchange = () => uploadAnexoComMetadados(pid, input, categoria, {posicao});
+  input.click();
+}
+function abrirUploadElemento(pid){
+  const dentes = ODONTO_BLOCOS.flatMap(b=>b.dentes);
+  modal("Foto por elemento", `
+    <label class="f"><span>Dente</span>
+      <select id="el-dente">${dentes.map(d=>`<option value="${d}">${d}</option>`).join("")}</select>
+    </label>
+    <label class="f"><span>Face (opcional — vazio = dente inteiro)</span>
+      <select id="el-face">
+        <option value="">Dente inteiro</option>
+        ${Object.entries(FACE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}
+      </select>
+    </label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="confirmarUploadElemento('${pid}')">Escolher imagem</button></div>`);
+}
+function confirmarUploadElemento(pid){
+  const dente = document.getElementById("el-dente").value;
+  const face = document.getElementById("el-face").value || "dente";
+  closeModal();
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = "image/*";
+  input.onchange = () => uploadAnexoComMetadados(pid, input, "elemento", {dente, face});
+  input.click();
+}
+async function uploadAnexoComMetadados(pid, input, categoria, extra){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const fd = new FormData();
+  fd.append("patientId", pid);
+  fd.append("categoria", categoria);
+  if(extra.posicao) fd.append("posicao", extra.posicao);
+  if(extra.dente) fd.append("dente", extra.dente);
+  if(extra.face) fd.append("face", extra.face);
+  fd.append("file", file);
+  try{
+    const novo = await apiUpload("/anexos", fd);
+    FICHA_ANEXOS = [novo, ...FICHA_ANEXOS];
+    render();
+    carregarThumbsAnexos();
+    toast("Imagem salva.");
+  }catch(e){ /* toast já exibido pelo api() */ }
+}
+
 function onOdontoFaceClick(dente, face){ _abrirModalOdonto(dente, face); }
 function onOdontoDenteClick(dente){ _abrirModalOdonto(dente, "dente"); }
 function _abrirModalOdonto(dente, faceClicada){
@@ -1852,6 +2009,10 @@ function vFicha(){
   </div>
 
   ${vOdontogramaSection(p)}
+
+  ${vPeriapicalSection(p.id)}
+  ${vFacialSection(p.id)}
+  ${vElementoSection(p.id)}
 
   <div class="grid g2" style="gap:12px;align-items:start">
     <div class="card">
