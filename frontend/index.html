@@ -226,6 +226,10 @@ let AUTH_IS_SUPERADMIN = false;
 let PLATAFORMA = { nome: "OdontoDesk", logoUrl: null };
 let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", logoUrl: null };
 
+/* ── deep-link da carteirinha (QR) — ?paciente=<id> abre a ficha direto após o login ── */
+let QR_PACIENTE_ALVO = new URLSearchParams(window.location.search).get("paciente") || null;
+if(QR_PACIENTE_ALVO){ history.replaceState(null, "", window.location.pathname); }
+
 /* ── API helpers ── */
 /* Evita cliques duplos criando registros repetidos: chamadas de escrita
    (POST/PUT/DELETE) idênticas e simultâneas são ignoradas — a segunda
@@ -736,6 +740,7 @@ function vAgendaDia(){
     <input type="date" value="${AGENDA_DAY}" onchange="AGENDA_DAY=this.value;render()">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,1);render()">${IC.right}</button>
     <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
+    ${appts.length?`<button class="btn ghost sm" style="margin-left:auto" onclick="gerarCarteirinhasLote('${AGENDA_DAY}')">🪪 Carteirinhas do dia</button>`:""}
   </div>
   ${DB.patients.length===0?empty("Cadastre um paciente antes de criar consultas."):
     appts.length===0?empty("Nenhuma consulta em "+fmtDate(AGENDA_DAY)+"."):
@@ -1991,6 +1996,99 @@ function fmtDateTime(iso){
   if(!iso) return "";
   return fmtDate(iso.slice(0,10)) + " às " + iso.slice(11,16);
 }
+
+/* ════════════════════════════════════════════
+   CARTEIRINHA DO PACIENTE — com QR de deep-link
+   O QR aponta pra ?paciente=<id>: quando alguém da equipe (já logada)
+   escaneia, o app abre direto na ficha, sem precisar procurar o paciente.
+   O QR em si não dá acesso a nada — continua tudo atrás do login normal.
+════════════════════════════════════════════ */
+async function _qrSvgDoPaciente(pid){
+  try{
+    const r = await fetch(API + `/patients/${pid}/qrcode.svg`, { headers: AUTH_TOKEN ? {Authorization:"Bearer "+AUTH_TOKEN} : {} });
+    if(r.ok) return await r.text();
+  }catch(e){}
+  return "";
+}
+function _carteirinhaCardHTML(p, fotoUrl, qrSvg){
+  const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : null;
+  return `<div class="card">
+    <div class="hd">
+      ${MINHA_CLINICA.logoUrl?`<img class="logo" src="${MINHA_CLINICA.logoUrl}">`:""}
+      <b>${esc((MINHA_CLINICA.nome||"").toUpperCase())}</b>
+    </div>
+    <div class="body">
+      ${fotoUrl?`<img class="foto" src="${fotoUrl}">`:`<div class="foto" style="display:flex;align-items:center;justify-content:center;font-size:14px;color:#94a3b8;font-weight:700">${initials(p.name)}</div>`}
+      <div class="info">
+        <div class="nome">${esc(p.name)}</div>
+        ${p.numProntuario?`<div class="linha">Prontuário: ${esc(p.numProntuario)}</div>`:""}
+        ${p.birth?`<div class="linha">Nasc.: ${fmtDate(p.birth)}${idade!==null?` (${idade} anos)`:""}</div>`:""}
+        ${p.phone?`<div class="linha">${esc(p.phone)}</div>`:""}
+      </div>
+      <div class="qr">${qrSvg}</div>
+    </div>
+  </div>`;
+}
+const CARTEIRINHA_CSS = `
+    .card{ width:85.6mm; height:53.98mm; background:#fff; border-radius:3mm; box-shadow:0 2px 10px rgba(0,0,0,.15); padding:4mm; box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden; break-inside:avoid; page-break-inside:avoid; }
+    .card .hd{ display:flex; align-items:center; gap:2mm; margin-bottom:2mm; }
+    .card .hd img.logo{ width:6mm; height:6mm; object-fit:contain; border-radius:1mm; }
+    .card .hd b{ font-size:8.5px; letter-spacing:.3px; }
+    .card .body{ display:flex; gap:3mm; flex-grow:1; align-items:center; }
+    .card .foto{ width:16mm; height:16mm; border-radius:2mm; background:#e2e8f0; object-fit:cover; flex-shrink:0; }
+    .card .info{ flex-grow:1; min-width:0; }
+    .card .info .nome{ font-size:10.5px; font-weight:700; line-height:1.2; margin-bottom:1mm; }
+    .card .info .linha{ font-size:7.5px; color:#475569; line-height:1.5 }
+    .card .qr{ width:15mm; height:15mm; flex-shrink:0; }
+    .card .qr svg{ width:100%; height:100% }`;
+async function gerarCarteirinha(pid){
+  const p = pById(pid); if(!p) return;
+  toast("Gerando carteirinha…");
+  let fotoUrl = null;
+  try{ const r = await api("GET", `/patients/${pid}/foto/url`); fotoUrl = r.url; }catch(e){}
+  const qrSvg = await _qrSvgDoPaciente(pid);
+  const win = window.open("", "_blank");
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Carteirinha - ${esc(p.name)}</title>
+  <style>
+    body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f1f5f9; margin:0; padding:24px; }
+    .noprint{ margin-bottom:16px }
+    ${CARTEIRINHA_CSS}
+    @media print{ .noprint{display:none} body{background:#fff;padding:0} }
+  </style></head><body>
+    <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button></div>
+    ${_carteirinhaCardHTML(p, fotoUrl, qrSvg)}
+  </body></html>`;
+  win.document.write(html);
+  win.document.close();
+}
+async function gerarCarteirinhasLote(dataISO){
+  const appts = DB.appointments.filter(a=>a.date===dataISO);
+  const idsUnicos = [...new Set(appts.map(a=>a.patientId))];
+  const pacientes = idsUnicos.map(id=>pById(id)).filter(Boolean);
+  if(pacientes.length===0){ toast("Nenhum paciente com consulta nesse dia."); return; }
+  toast(`Gerando ${pacientes.length} carteirinha${pacientes.length>1?"s":""}…`);
+  const cards = await Promise.all(pacientes.map(async p=>{
+    let fotoUrl = null;
+    try{ const r = await api("GET", `/patients/${p.id}/foto/url`); fotoUrl = r.url; }catch(e){}
+    const qrSvg = await _qrSvgDoPaciente(p.id);
+    return _carteirinhaCardHTML(p, fotoUrl, qrSvg);
+  }));
+  const win = window.open("", "_blank");
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Carteirinhas - ${fmtDate(dataISO)}</title>
+  <style>
+    body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f1f5f9; margin:0; padding:24px; }
+    .noprint{ margin-bottom:16px }
+    .folha{ display:grid; grid-template-columns:repeat(2,85.6mm); gap:6mm; justify-content:center; }
+    ${CARTEIRINHA_CSS}
+    @media print{ .noprint{display:none} body{background:#fff;padding:0} .folha{gap:4mm} }
+  </style></head><body>
+    <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
+    <span style="margin-left:10px;color:#666;font-size:13px">${pacientes.length} carteirinha${pacientes.length>1?"s":""} — consultas de ${fmtDate(dataISO)}</span></div>
+    <div class="folha">${cards.join("")}</div>
+  </body></html>`;
+  win.document.write(html);
+  win.document.close();
+}
 function vFicha(){
   const p = pById(FICHA_ID);
   if(!p) return `<button class="btn ghost" onclick="go('patients')">${IC.left} Voltar</button>` + empty("Paciente não encontrado.");
@@ -1998,6 +2096,8 @@ function vFicha(){
   const consultas = DB.appointments.filter(a=>a.patientId===p.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
   const lancs = (DB.lancamentos||[]).filter(l=>l.patientId===p.id).sort((a,b)=>b.vencimento.localeCompare(a.vencimento));
   const emAberto = lancs.filter(l=>!l.pagoEm).reduce((s,l)=>s+l.valor,0);
+  const hoje = todayISO();
+  const proxima = consultas.filter(a=>a.date>=hoje && (a.status==="agendado"||a.status==="confirmado")).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
   const idade = p.birth ? Math.floor((new Date() - new Date(p.birth+"T00:00:00")) / 31557600000) : null;
   const alertas = [p.alergias&&`Alergia: ${p.alergias}`, p.medicacoes&&`Medicação: ${p.medicacoes}`, p.condicoesSistemicas&&p.condicoesSistemicas].filter(Boolean);
   return `
@@ -2009,8 +2109,20 @@ function vFicha(){
       <h1 style="font-size:19px">${esc(p.name)}</h1>
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
+    <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
     <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
+  </div>
+
+  <div class="card" style="margin-bottom:12px;display:flex;gap:18px;flex-wrap:wrap;padding:12px 16px">
+    <div style="min-width:160px">
+      <div class="meta" style="margin-bottom:2px">Próxima consulta</div>
+      <div style="font-size:13.5px;font-weight:600">${proxima ? `${fmtDate(proxima.date)} às ${proxima.time}${proxima.profissionalNome?" · "+esc(proxima.profissionalNome):""}` : "Nenhuma agendada"}</div>
+    </div>
+    <div style="min-width:140px">
+      <div class="meta" style="margin-bottom:2px">Situação financeira</div>
+      <div style="font-size:13.5px;font-weight:600;color:${emAberto>0?"var(--rose)":"var(--green)"}">${emAberto>0?fmtMoney(emAberto)+" em aberto":"Em dia"}</div>
+    </div>
   </div>
 
   ${alertas.length?`<div class="card" style="margin-bottom:12px;background:#fff1f2;border-color:#fecdd3">
@@ -3474,7 +3586,8 @@ async function authSubmit(setup){
     document.getElementById("login-screen")?.remove();
     await carregarMinhaClinica();
     await reloadAll();
-    toast(`Bem-vindo, ${AUTH_NOME.split(" ")[0]}! 👋`);
+    if(QR_PACIENTE_ALVO){ const alvo = QR_PACIENTE_ALVO; QR_PACIENTE_ALVO = null; openFicha(alvo); }
+    else toast(`Bem-vindo, ${AUTH_NOME.split(" ")[0]}! 👋`);
   }catch(e){
     if(e.message && e.message.includes("Confirme seu e-mail")){
       const card = document.getElementById("login-card");
@@ -3620,7 +3733,10 @@ if("serviceWorker" in navigator){
     }
   }
   if(!AUTH_TOKEN){ showLogin(); return; }
-  try { await carregarMinhaClinica(); await reloadAll(); }
+  try {
+    await carregarMinhaClinica(); await reloadAll();
+    if(QR_PACIENTE_ALVO){ const alvo = QR_PACIENTE_ALVO; QR_PACIENTE_ALVO = null; openFicha(alvo); }
+  }
   catch(e){ /* 401 já redireciona para o login dentro do api() */ }
 })();
 </script>
