@@ -1290,6 +1290,28 @@ def anexo_url(aid: str, request: Request):
         return {"url": _sb_signed_url(a.storagePath), "nome": a.nome, "mimeType": a.mimeType}
 
 
+class AnexoRenameIn(BaseModel):
+    nome: str
+
+
+@app.put("/api/anexos/{aid}")
+def rename_anexo(aid: str, data: AnexoRenameIn, request: Request):
+    """Renomeia um anexo (só o nome de exibição — o arquivo em si e seu
+    caminho no storage não mudam)."""
+    quem = _usuario_logado(request)
+    novo_nome = data.nome.strip()
+    if not novo_nome:
+        raise HTTPException(422, "Informe um nome para o arquivo.")
+    with SessionLocal() as db:
+        a = db.get(Anexo, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anexo não encontrado.")
+        a.nome = novo_nome
+        db.commit()
+        db.refresh(a)
+        return {**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None}
+
+
 @app.delete("/api/anexos/{aid}", status_code=204)
 def delete_anexo(aid: str, request: Request):
     quem = _usuario_logado(request)
