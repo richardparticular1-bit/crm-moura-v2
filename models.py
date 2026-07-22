@@ -58,6 +58,11 @@ class Paciente(Base):
     condicoesSistemicas: Mapped[str] = mapped_column(Text, default="")  # ex: "Diabetes, Hipertensão"
     # ── foto ──
     fotoPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    # Token opaco e imprevisível pro portal público do paciente (não é o id
+    # interno — o id é previsível/sequencial e nunca deve abrir uma página
+    # sem login). Gerado sob demanda na primeira vez que a carteirinha é
+    # emitida; None até lá.
+    tokenPortal: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
@@ -137,6 +142,8 @@ class Clinica(Base):
     enderecoCompleto: Mapped[str] = mapped_column(String(300), default="")
     telefoneWhatsapp: Mapped[str] = mapped_column(String(30), default="")
     email: Mapped[str] = mapped_column(String(120), default="")              # e-mail institucional da clínica
+    cidade: Mapped[str] = mapped_column(String(60), default="")   # usado no payload do Pix (campo "merchant city")
+    chavePix: Mapped[str] = mapped_column(String(140), default="")  # CPF/CNPJ/e-mail/telefone/chave aleatória
 
 
 class Plataforma(Base):
