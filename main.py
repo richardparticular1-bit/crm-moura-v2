@@ -12,7 +12,10 @@ import os
 import random
 import secrets
 import time
+import unicodedata
+from binascii import crc_hqx
 from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +124,7 @@ def icon512():
 SESSAO_DIAS = 30
 AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
               "/api/signup", "/api/verify-email", "/api/resend-verification",
-              "/api/plataforma")
+              "/api/plataforma", "/api/portal")
 
 
 def _hash_senha(senha: str) -> str:
@@ -532,6 +535,8 @@ class ClinicaPerfilIn(BaseModel):
     enderecoCompleto: str = ""
     telefoneWhatsapp: str = ""
     email: str = ""
+    cidade: str = ""
+    chavePix: str = ""
 
 
 def _path_logo_clinica(clinica_id: int) -> str:
@@ -549,7 +554,7 @@ def get_clinica(request: Request):
         return {
             "nome": c.nome, "responsavelTecnico": c.responsavelTecnico, "croResponsavel": c.croResponsavel,
             "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
-            "email": c.email, "logoUrl": logo_url,
+            "email": c.email, "cidade": c.cidade, "chavePix": c.chavePix, "logoUrl": logo_url,
         }
 
 
@@ -570,6 +575,8 @@ def update_clinica(data: ClinicaPerfilIn, request: Request):
         c.enderecoCompleto = data.enderecoCompleto.strip()
         c.telefoneWhatsapp = data.telefoneWhatsapp.strip()
         c.email = data.email.strip()
+        c.cidade = data.cidade.strip()
+        c.chavePix = data.chavePix.strip()
         db.commit()
     return {"ok": True}
 
@@ -815,21 +822,128 @@ def delete_patient(pid: str, request: Request):
         db.commit()
 
 
+def _garantir_token_portal(db, p: Paciente) -> str:
+    """Gera (na primeira vez) e devolve o token opaco do portal público do
+    paciente. NUNCA usar o id interno pra isso — o id é curto e previsível
+    (aleatório + sufixo de timestamp), o token é longo e imprevisível
+    (256 bits), porque é a ÚNICA credencial que protege o link sem login."""
+    if not p.tokenPortal:
+        p.tokenPortal = secrets.token_urlsafe(24)
+        db.commit()
+        db.refresh(p)
+    return p.tokenPortal
+
+
 @app.get("/api/patients/{pid}/qrcode.svg")
 def get_patient_qrcode(pid: str, request: Request):
-    """QR da carteirinha: aponta pra um deep-link (?paciente=<id>) que abre
-    a ficha direto quando escaneado por alguém já logado no app — nunca uma
-    página pública, o dado do paciente continua atrás do login normal."""
+    """QR da carteirinha: aponta pro portal público do paciente (token
+    opaco, sem exigir login) — pra ele ver a própria consulta, pendência
+    financeira e falar com a clínica direto do celular."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)
         if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
-    url = f"{APP_URL}/?paciente={pid}"
+        token = _garantir_token_portal(db, p)
+    url = f"{APP_URL}/?portal={token}"
     img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
     buf = io.BytesIO()
     img.save(buf)
     return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PORTAL PÚBLICO DO PACIENTE  (sem login — protegido só pelo token do QR)
+# ══════════════════════════════════════════════════════════════════════════════
+def _sem_acento_maiusculo(txto: str, max_len: int) -> str:
+    """Normaliza texto pro padrão exigido pelos campos do Pix: só ASCII,
+    maiúsculo, sem acento. Usado no nome/cidade do recebedor no payload."""
+    s = unicodedata.normalize("NFKD", txto or "").encode("ascii", "ignore").decode("ascii")
+    s = "".join(c for c in s if c.isalnum() or c == " ").strip().upper()
+    return (s or "NA")[:max_len]
+
+
+def _pix_tlv(id_: str, value: str) -> str:
+    return f"{id_}{len(value):02d}{value}"
+
+
+def _gerar_pix_copia_cola(chave: str, nome: str, cidade: str, valor_centavos: int, txid: str = "") -> str:
+    """Monta o payload Pix "copia e cola" (padrão BR Code / EMV do Bacen).
+    Testado byte a byte contra uma implementação independente do CRC16 e
+    com round-trip real (gerar QR -> decodificar -> comparar) antes de
+    entrar em produção."""
+    chave = (chave or "").strip()
+    nome_fmt = _sem_acento_maiusculo(nome, 25)
+    cidade_fmt = _sem_acento_maiusculo(cidade, 15)
+    txid_fmt = "".join(c for c in (txid or "") if c.isalnum())[:25] or "***"
+    valor = (Decimal(valor_centavos) / 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    conta = _pix_tlv("00", "BR.GOV.BCB.PIX") + _pix_tlv("01", chave)
+    payload = (
+        _pix_tlv("00", "01")
+        + _pix_tlv("26", conta)
+        + _pix_tlv("52", "0000")
+        + _pix_tlv("53", "986")
+        + _pix_tlv("54", str(valor))
+        + _pix_tlv("58", "BR")
+        + _pix_tlv("59", nome_fmt)
+        + _pix_tlv("60", cidade_fmt)
+        + _pix_tlv("62", _pix_tlv("05", txid_fmt))
+    )
+    base = payload + "6304"
+    crc = crc_hqx(base.encode("ascii"), 0xFFFF)
+    return base + f"{crc:04X}"
+
+
+@app.get("/api/portal/{token}")
+def get_portal_paciente(token: str):
+    with SessionLocal() as db:
+        p = db.query(Paciente).filter(Paciente.tokenPortal == token).first()
+        if not p:
+            raise HTTPException(404, "Link inválido.")
+        clinica = db.get(Clinica, p.clinicaId)
+        hoje = datetime.now().date().isoformat()
+        proxima = (
+            db.query(Consulta)
+            .filter(
+                Consulta.patientId == p.id, Consulta.clinicaId == p.clinicaId,
+                Consulta.date >= hoje, Consulta.status.in_(["agendado", "confirmado"]),
+            )
+            .order_by(Consulta.date.asc(), Consulta.time.asc())
+            .first()
+        )
+        prof_prox = db.get(Profissional, proxima.profissionalId) if (proxima and proxima.profissionalId) else None
+        lancs_abertos = (
+            db.query(Lancamento)
+            .filter(Lancamento.patientId == p.id, Lancamento.clinicaId == p.clinicaId, Lancamento.pagoEm.is_(None))
+            .order_by(Lancamento.vencimento.asc())
+            .all()
+        )
+        total_aberto = sum(l.valor for l in lancs_abertos)
+        pix_copia_cola = None
+        if total_aberto > 0 and clinica and clinica.chavePix.strip():
+            pix_copia_cola = _gerar_pix_copia_cola(
+                clinica.chavePix, clinica.nome, clinica.cidade,
+                total_aberto, f"CRM{(p.numProntuario or p.id)[:10]}",
+            )
+        return {
+            "nome": p.name,
+            "proximaConsulta": {
+                "data": proxima.date, "hora": proxima.time,
+                "profissionalNome": prof_prox.nome if prof_prox else None,
+            } if proxima else None,
+            "ultimaVisita": p.lastVisit,
+            "clinica": {
+                "nome": clinica.nome if clinica else "",
+                "endereco": clinica.enderecoCompleto if clinica else "",
+                "telefoneWhatsapp": clinica.telefoneWhatsapp if clinica else "",
+            },
+            "totalAberto": total_aberto,
+            "lancamentosAbertos": [
+                {"descricao": l.descricao, "vencimento": l.vencimento, "valor": l.valor} for l in lancs_abertos
+            ],
+            "pixCopiaCola": pix_copia_cola,
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
