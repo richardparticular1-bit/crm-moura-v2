@@ -24,11 +24,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
-from sqlalchemy import event
-from sqlalchemy.orm import Session
 
 from database import SessionLocal, init_db
-from models import Anexo, Clinica, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import Anexo, Clinica, Config, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.8 (multi-tenant: fundação)")
 
@@ -74,39 +72,10 @@ def _enviar_email(destinatario: str, assunto: str, html: str) -> bool:
 
 scheduler = BackgroundScheduler()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MULTI-TENANT — FUNDAÇÃO (Fase 1)
-# ══════════════════════════════════════════════════════════════════════════════
-# TEMPORÁRIO: enquanto os módulos (pacientes, agenda, financeiro...) ainda não
-# filtram explicitamente por clínica (isso é a Fase 2, módulo a módulo), este
-# listener carimba clinicaId automaticamente em QUALQUER registro novo que não
-# o tenha definido, usando a única clínica existente. Isso garante que nada
-# quebra hoje. Conforme cada módulo ganha isolamento de verdade na Fase 2, ele
-# passa a definir clinicaId explicitamente e este shim vira um no-op para ele.
-DEFAULT_CLINICA_ID: int | None = None
-
-
-@event.listens_for(Session, "before_flush")
-def _auto_carimba_clinica(session, flush_context, instances):
-    if DEFAULT_CLINICA_ID is None:
-        return
-    for obj in session.new:
-        if hasattr(obj, "clinicaId") and getattr(obj, "clinicaId", None) is None:
-            obj.clinicaId = DEFAULT_CLINICA_ID
-
-
-def _carregar_clinica_padrao():
-    """Roda no startup: descobre a clínica existente para o shim acima."""
-    global DEFAULT_CLINICA_ID
-    with SessionLocal() as db:
-        c = db.query(Clinica).order_by(Clinica.id).first()
-        DEFAULT_CLINICA_ID = c.id if c else None
-
 
 @app.on_event("startup")
 def startup():
     init_db()
-    _carregar_clinica_padrao()
     if not scheduler.running:
         scheduler.add_job(checar_consultas_proximas, "interval", minutes=5, id="check_appts", replace_existing=True)
         scheduler.add_job(backup_automatico, "cron", hour=6, minute=0, id="backup_diario", replace_existing=True)  # 06:00 UTC = 03:00 BRT
@@ -148,7 +117,8 @@ def icon512():
 # ══════════════════════════════════════════════════════════════════════════════
 SESSAO_DIAS = 30
 AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
-              "/api/signup", "/api/verify-email", "/api/resend-verification")
+              "/api/signup", "/api/verify-email", "/api/resend-verification",
+              "/api/plataforma")
 
 
 def _hash_senha(senha: str) -> str:
@@ -224,8 +194,6 @@ def auth_setup(data: SetupIn):
         clinica = Clinica(nome=(data.clinicaNome.strip() or "Minha Clínica"), plano="ativo", ativa=True)
         db.add(clinica)
         db.flush()  # garante clinica.id antes de criar o usuário
-        global DEFAULT_CLINICA_ID
-        DEFAULT_CLINICA_ID = clinica.id  # ambientes novos: a clínica só passa a existir agora
         u = Usuario(
             clinicaId=clinica.id, nome=data.nome.strip(), email=data.email.strip().lower(),
             senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=True,
@@ -275,6 +243,14 @@ class SignupIn(BaseModel):
     nome: str
     email: str
     senha: str
+    # ── dados legais do consultório — opcionais aqui; quem não preencher agora
+    # completa depois em Ajustes > Perfil do Consultório ──
+    responsavelTecnico: str = ""
+    croResponsavel: str = ""
+    cnpj: str = ""
+    enderecoCompleto: str = ""
+    telefoneWhatsapp: str = ""
+    emailClinica: str = ""
 
 
 def _email_confirmacao_html(nome: str, link: str) -> str:
@@ -300,7 +276,12 @@ def signup(data: SignupIn):
     with SessionLocal() as db:
         if db.query(Usuario).filter(Usuario.email == email).first():
             raise HTTPException(409, "Já existe uma conta com este e-mail.")
-        clinica = Clinica(nome=data.clinicaNome.strip(), plano="trial", ativa=True)
+        clinica = Clinica(
+            nome=data.clinicaNome.strip(), plano="trial", ativa=True,
+            responsavelTecnico=data.responsavelTecnico.strip(), croResponsavel=data.croResponsavel.strip(),
+            cnpj=data.cnpj.strip(), enderecoCompleto=data.enderecoCompleto.strip(),
+            telefoneWhatsapp=data.telefoneWhatsapp.strip(), email=data.emailClinica.strip(),
+        )
         db.add(clinica)
         db.flush()
         token = secrets.token_urlsafe(32)
@@ -448,6 +429,153 @@ def update_usuario(uid: int, data: UsuarioIn, request: Request):
         return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MARCA DA PLATAFORMA  (neutra, exibida no login ANTES da autenticação)
+# ══════════════════════════════════════════════════════════════════════════════
+# GET é público (está em AUTH_LIVRE) — a tela de login precisa saber nome/logo
+# antes de qualquer clínica ser identificada. PUT e upload de logo exigem
+# login E isSuperAdmin, verificado manualmente dentro de cada handler (o
+# middleware não distingue métodos, só prefixo de caminho).
+class PlataformaIn(BaseModel):
+    nome: str
+
+
+def _exige_superadmin(request: Request) -> Usuario:
+    quem = _usuario_logado(request)
+    if not quem.isSuperAdmin:
+        raise HTTPException(403, "Só um administrador da plataforma pode alterar isso.")
+    return quem
+
+
+@app.get("/api/plataforma")
+def get_plataforma():
+    with SessionLocal() as db:
+        p = db.get(Plataforma, 1)
+        if not p:
+            p = Plataforma(id=1)
+            db.add(p)
+            db.commit()
+            db.refresh(p)
+        logo_url = _sb_signed_url_or_none(_path_logo_plataforma(), segundos=3600) if p.logoPath else None
+        return {"nome": p.nome, "logoUrl": logo_url}
+
+
+@app.put("/api/plataforma")
+def set_plataforma(data: PlataformaIn, request: Request):
+    _exige_superadmin(request)
+    nome = data.nome.strip()
+    if not nome:
+        raise HTTPException(422, "Informe um nome.")
+    with SessionLocal() as db:
+        p = db.get(Plataforma, 1)
+        if not p:
+            p = Plataforma(id=1)
+            db.add(p)
+        p.nome = nome
+        db.commit()
+    return {"ok": True}
+
+
+def _path_logo_plataforma() -> str:
+    return "_plataforma/logo.png"
+
+
+@app.post("/api/plataforma/logo", status_code=201)
+def upload_logo_plataforma(data: AssinaturaIn, request: Request):
+    # reaproveita AssinaturaIn (só tem um campo dataUrl em base64) — mesmo formato de entrada
+    _exige_superadmin(request)
+    _sb_configurado()
+    raw = _decodificar_assinatura(data.dataUrl)
+    _sb_upload(_path_logo_plataforma(), raw, "image/png")
+    with SessionLocal() as db:
+        p = db.get(Plataforma, 1)
+        if not p:
+            p = Plataforma(id=1)
+            db.add(p)
+        p.logoPath = _path_logo_plataforma()
+        db.commit()
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PERFIL DO CONSULTÓRIO  (dados da própria clínica; qualquer usuário logado vê e edita)
+# ══════════════════════════════════════════════════════════════════════════════
+class ClinicaPerfilIn(BaseModel):
+    nome: str
+    responsavelTecnico: str = ""
+    croResponsavel: str = ""
+    cnpj: str = ""
+    enderecoCompleto: str = ""
+    telefoneWhatsapp: str = ""
+    email: str = ""
+
+
+def _path_logo_clinica(clinica_id: int) -> str:
+    return f"_logos/{clinica_id}.png"
+
+
+@app.get("/api/clinica")
+def get_clinica(request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, quem.clinicaId)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        logo_url = _sb_signed_url_or_none(_path_logo_clinica(c.id), segundos=3600) if c.logoPath else None
+        return {
+            "nome": c.nome, "responsavelTecnico": c.responsavelTecnico, "croResponsavel": c.croResponsavel,
+            "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
+            "email": c.email, "logoUrl": logo_url,
+        }
+
+
+@app.put("/api/clinica")
+def update_clinica(data: ClinicaPerfilIn, request: Request):
+    quem = _usuario_logado(request)
+    nome = data.nome.strip()
+    if not nome:
+        raise HTTPException(422, "Informe o nome da clínica.")
+    with SessionLocal() as db:
+        c = db.get(Clinica, quem.clinicaId)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        c.nome = nome
+        c.responsavelTecnico = data.responsavelTecnico.strip()
+        c.croResponsavel = data.croResponsavel.strip()
+        c.cnpj = data.cnpj.strip()
+        c.enderecoCompleto = data.enderecoCompleto.strip()
+        c.telefoneWhatsapp = data.telefoneWhatsapp.strip()
+        c.email = data.email.strip()
+        db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/clinica/logo", status_code=201)
+def upload_logo_clinica(data: AssinaturaIn, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    raw = _decodificar_assinatura(data.dataUrl)
+    _sb_upload(_path_logo_clinica(quem.clinicaId), raw, "image/png")
+    with SessionLocal() as db:
+        c = db.get(Clinica, quem.clinicaId)
+        if c:
+            c.logoPath = _path_logo_clinica(quem.clinicaId)
+            db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/clinica/logo", status_code=204)
+def remover_logo_clinica(request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        c = db.get(Clinica, quem.clinicaId)
+        if c:
+            c.logoPath = None
+            db.commit()
+    _sb_delete(_path_logo_clinica(quem.clinicaId))
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 def _row(obj) -> dict[str, Any]:
     d = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
@@ -456,6 +584,18 @@ def _row(obj) -> dict[str, Any]:
 
 def _new_id() -> str:
     return str(random.randint(100000, 999999)) + str(int(time.time()))[-4:]
+
+
+def _prof_da_clinica(db, prof_id: int | None, clinica_id: int) -> bool:
+    """True se prof_id for None (campo opcional, não informado) OU se apontar
+    para um profissional que de fato pertence à clínica de quem está fazendo
+    a requisição. Usar sempre que um profissionalId vier do corpo da
+    requisição (não de um registro já existente no banco) — sem isso, nada
+    impede que o cliente referencie um profissional de outra clínica."""
+    if prof_id is None:
+        return True
+    prof = db.get(Profissional, prof_id)
+    return bool(prof and prof.clinicaId == clinica_id)
 
 
 def _minutos(hhmm: str) -> int | None:
@@ -722,6 +862,8 @@ def create_appointment(data: ConsultaIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         conflito = _consulta_conflitante(db, data, quem.clinicaId)
         if conflito:
             pac2 = db.get(Paciente, conflito.patientId)
@@ -745,6 +887,8 @@ def update_appointment(aid: str, data: ConsultaIn, request: Request):
         a = db.get(Consulta, aid)
         if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404)
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         conflito = _consulta_conflitante(db, data, quem.clinicaId, exclude_id=aid)
         if conflito:
             pac = db.get(Paciente, conflito.patientId)
@@ -869,6 +1013,8 @@ def create_tarefa(data: TarefaIn, request: Request):
             pac = db.get(Paciente, data.patientId)
             if not pac or pac.clinicaId != quem.clinicaId:
                 raise HTTPException(404, "Paciente não encontrado")
+        if not _prof_da_clinica(db, data.responsavelId, quem.clinicaId):
+            raise HTTPException(404, "Responsável não encontrado")
         t = Tarefa(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(t)
         db.commit()
@@ -883,6 +1029,8 @@ def update_tarefa(tid: int, data: TarefaIn, request: Request):
         t = db.get(Tarefa, tid)
         if not t or t.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Tarefa não encontrada")
+        if not _prof_da_clinica(db, data.responsavelId, quem.clinicaId):
+            raise HTTPException(404, "Responsável não encontrado")
         for k, v in data.model_dump().items():
             setattr(t, k, v)
         db.commit()
@@ -936,6 +1084,8 @@ def list_mensagens(request: Request, canal: str = "geral", limit: int = 100):
 def send_mensagem(data: MensagemIn, request: Request):
     quem = _usuario_logado(request)
     with SessionLocal() as db:
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         m = MensagemChat(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(m)
         db.commit()
@@ -1037,6 +1187,8 @@ def get_vapid_public_key():
 def push_subscribe(data: PushSubIn, request: Request):
     quem = _usuario_logado(request)
     with SessionLocal() as db:
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         existing = db.query(PushSubscription).filter(PushSubscription.endpoint == data.endpoint).first()
         if existing:
             if existing.clinicaId != quem.clinicaId:
@@ -1265,6 +1417,7 @@ async def upload_anexo(
     patientId: str = Form(...),
     categoria: str = Form("documento"),
     file: UploadFile = File(...),
+    origemId: str | None = Form(None),
 ):
     quem = _usuario_logado(request)
     _sb_configurado()
@@ -1282,12 +1435,16 @@ async def upload_anexo(
         pac = db.get(Paciente, patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
+        if origemId:
+            origem = db.get(Anexo, origemId)
+            if not origem or origem.clinicaId != quem.clinicaId or origem.patientId != patientId:
+                raise HTTPException(404, "Anexo original não encontrado.")
         aid = _new_id()
         nome = _nome_seguro(file.filename or "arquivo")
         path = f"{quem.clinicaId}/{patientId}/{aid}_{nome}"
         _sb_upload(path, conteudo, mime)
         a = Anexo(id=aid, clinicaId=quem.clinicaId, patientId=patientId, categoria=categoria, nome=file.filename or nome,
-                  mimeType=mime, tamanho=len(conteudo), storagePath=path)
+                  mimeType=mime, tamanho=len(conteudo), storagePath=path, origemId=origemId or None)
         db.add(a)
         db.commit()
         return {**_row(a), "created_at": a.created_at.isoformat()}
@@ -1605,7 +1762,7 @@ def create_marca_odontograma(data: OdontogramaMarcaIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
-        if not db.get(Profissional, data.profissionalId):
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
             raise HTTPException(422, "Informe o profissional responsável.")
         m = OdontogramaMarca(
             id=_new_id(), clinicaId=quem.clinicaId, patientId=data.patientId, profissionalId=data.profissionalId,
@@ -1618,16 +1775,30 @@ def create_marca_odontograma(data: OdontogramaMarcaIn, request: Request):
 
 
 @app.get("/api/odontograma")
-def get_odontograma(patient_id: str, request: Request):
+def get_odontograma(patient_id: str, request: Request, ate: str | None = None):
+    """Estado do odontograma. Por padrão reflete a situação mais recente.
+    Com `ate=YYYY-MM-DD`, reconstrói o estado como estava até o fim daquele
+    dia — usa só o histórico até ali, sem descartar nada: o odontograma é
+    registro imutável, então "voltar no tempo" é só filtrar o mesmo dado."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
-        rows = (
+        todas = (
             db.query(OdontogramaMarca)
             .filter(OdontogramaMarca.patientId == patient_id, OdontogramaMarca.clinicaId == quem.clinicaId)
             .order_by(OdontogramaMarca.created_at.asc())
             .all()
         )
-        # estado atual: última marcação vence, por (dente, face)
+        datas_disponiveis = sorted({m.created_at.date().isoformat() for m in todas})
+
+        rows = todas
+        if ate:
+            try:
+                limite = datetime.strptime(ate, "%Y-%m-%d") + timedelta(days=1) - timedelta(seconds=1)
+            except ValueError:
+                raise HTTPException(422, "Data inválida.")
+            rows = [m for m in todas if m.created_at <= limite]
+
+        # estado na data de referência: última marcação vence, por (dente, face)
         latest: dict[tuple, OdontogramaMarca] = {}
         for m in rows:
             latest[(m.dente, m.face)] = m
@@ -1641,16 +1812,16 @@ def get_odontograma(patient_id: str, request: Request):
             else:
                 estado[dente].setdefault("faces", {})[face] = m.status
 
-        profs = {p.id: p for p in db.query(Profissional).all()}
+        profs = {p.id: p for p in db.query(Profissional).filter(Profissional.clinicaId == quem.clinicaId).all()}
         historico = []
-        for m in reversed(rows[-200:]):  # últimas 200, mais recente primeiro
+        for m in reversed(rows[-200:]):  # últimas 200 até a data de referência, mais recente primeiro
             prof = profs.get(m.profissionalId)
             historico.append({
                 "id": m.id, "dente": m.dente, "face": m.face, "status": m.status,
                 "observacao": m.observacao, "profissionalNome": prof.nome if prof else "—",
                 "created_at": m.created_at.isoformat(),
             })
-        return {"estado": estado, "historico": historico}
+        return {"estado": estado, "historico": historico, "datasDisponiveis": datas_disponiveis}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1694,7 +1865,7 @@ def create_evolucao(data: EvolucaoIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
-        if not db.get(Profissional, data.profissionalId):
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
             raise HTTPException(422, "Informe o profissional responsável pela evolução.")
         e = Evolucao(
             id=_new_id(),
@@ -1812,6 +1983,8 @@ def create_orcamento(data: OrcamentoIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         o = Orcamento(
             id=_new_id(),
             clinicaId=quem.clinicaId,
@@ -1847,6 +2020,8 @@ def update_orcamento(oid: str, data: OrcamentoIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         o.patientId = data.patientId
         o.profissionalId = data.profissionalId
         o.data = data.data
@@ -2099,6 +2274,8 @@ def create_lancamento(data: LancamentoIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         criados = []
         base = data.valor // n
         resto = data.valor - base * n  # primeira parcela absorve o resto da divisão
@@ -2134,6 +2311,8 @@ def update_lancamento(lid: str, data: LancamentoIn, request: Request):
         l = db.get(Lancamento, lid)
         if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Lançamento não encontrado")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado")
         for k, v in data.model_dump(exclude={"id", "parcelas"}).items():
             setattr(l, k, v)
         db.commit()
