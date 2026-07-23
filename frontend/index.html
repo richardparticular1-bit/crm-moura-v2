@@ -585,6 +585,7 @@ function vPatients(){
       </div>
       ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
       <button class="btn ghost sm" onclick="openFicha('${p.id}')">📋 Prontuário</button>
+      <button class="icon-btn" onclick="openApptForm(null,'${p.id}')" aria-label="Agendar consulta" title="Agendar consulta">${IC.cal}</button>
       <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
       <button class="icon-btn del" onclick="delPatient('${p.id}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
@@ -898,12 +899,14 @@ async function delAppt(id){
   await api("DELETE",`/appointments/${id}`);
   await reloadAll(); toast("Consulta excluída.");
 }
-function openApptForm(id){
+function openApptForm(id, patientId){
   const a = id ? DB.appointments.find(x=>x.id===id) : null;
+  const preSelPid = a ? a.patientId : (patientId || null);
+  const preSelPac = preSelPid ? pById(preSelPid) : null;
   const ps = DB.patients.slice().sort((x,y)=>x.name.localeCompare(y.name));
   const profs = DB.profissionais.filter(p=>p.ativo || (a && p.id===a.profissionalId));
   modal(a?"Editar consulta":"Nova consulta",`
-    <label class="f"><span>Paciente</span><select id="a-pat">${ps.map(p=>`<option value="${p.id}" ${a&&a.patientId===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <label class="f"><span>Paciente</span><select id="a-pat" onchange="_apptFormPreencherProntuario()">${ps.map(p=>`<option value="${p.id}" ${preSelPid===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
     <label class="f"><span>Dentista responsável</span><select id="a-prof"><option value="">— Sem preferência —</option>${profs.map(p=>`<option value="${p.id}" ${a&&a.profissionalId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></label>
     <div class="grid g2">
       <label class="f"><span>Data</span><input type="date" id="a-date" value="${a?a.date:AGENDA_DAY}"></label>
@@ -914,7 +917,7 @@ function openApptForm(id){
       <label class="f"><span>Procedimento</span><select id="a-proc">${PROCEDURES.map(p=>`<option ${a&&a.procedure===p?"selected":""}>${p}</option>`).join("")}</select></label>
     </div>
     <div class="grid g2">
-      <label class="f"><span>N° Prontuário</span><input id="a-pron" value="${a?esc(a.numProntuario||""):""}" placeholder="Opcional"></label>
+      <label class="f"><span>N° Prontuário</span><input id="a-pron" value="${a?esc(a.numProntuario||""):esc((preSelPac&&preSelPac.numProntuario)||"")}" placeholder="Opcional"></label>
       <label class="f"><span>N° Orçamento</span><input id="a-orc" value="${a?esc(a.numOrcamento||""):""}" placeholder="Opcional"></label>
     </div>
     ${a?`<label class="f"><span>Status</span><select id="a-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}</select></label>`:""}
@@ -922,6 +925,16 @@ function openApptForm(id){
     ${a?`<button class="btn ghost" onclick="closeModal();openLancForm(null,'${a.id}')" style="color:var(--green);border-color:#a7f3d0">💰 Gerar cobrança</button>`:"<span></span>"}
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="saveAppt('${id||""}')">${a?"Salvar alterações":"Agendar"}</button></div></div>`);
+}
+function _apptFormPreencherProntuario(){
+  // Ao trocar o paciente no formulário, atualiza o N° Prontuário sugerido —
+  // só se o campo ainda não tiver sido preenchido manualmente diferente,
+  // pra não sobrescrever algo que a pessoa já digitou.
+  const sel = document.getElementById("a-pat");
+  const campo = document.getElementById("a-pron");
+  if(!sel || !campo) return;
+  const pac = pById(sel.value);
+  if(pac && pac.numProntuario) campo.value = pac.numProntuario;
 }
 async function saveAppt(id){
   const g=i=>document.getElementById(i).value;
@@ -2112,6 +2125,7 @@ function vFicha(){
       <h1 style="font-size:19px">${esc(p.name)}</h1>
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
+    <button class="btn ghost sm" onclick="openApptForm(null,'${p.id}')">${IC.cal} Agendar</button>
     <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
     <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
