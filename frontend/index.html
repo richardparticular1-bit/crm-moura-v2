@@ -224,7 +224,7 @@ let AUTH_IS_SUPERADMIN = false;
 
 /* ── marca (plataforma = neutra, exibida antes do login; clínica = a do usuário logado) ── */
 let PLATAFORMA = { nome: "OdontoDesk", logoUrl: null };
-let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", cidade: "", chavePix: "", logoUrl: null };
+let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", cidade: "", chavePix: "", tipoChavePix: "", logoUrl: null };
 
 /* ── deep-link da carteirinha (QR) — ?paciente=<id> abre a ficha direto após o login ── */
 let QR_PACIENTE_ALVO = new URLSearchParams(window.location.search).get("paciente") || null;
@@ -310,7 +310,7 @@ async function carregarMinhaClinica(){
     MINHA_CLINICA = {
       nome: c.nome || "", responsavelTecnico: c.responsavelTecnico || "", croResponsavel: c.croResponsavel || "",
       cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
-      email: c.email || "", cidade: c.cidade || "", chavePix: c.chavePix || "", logoUrl: c.logoUrl || null,
+      email: c.email || "", cidade: c.cidade || "", chavePix: c.chavePix || "", tipoChavePix: c.tipoChavePix || "", logoUrl: c.logoUrl || null,
     };
     aplicarMarcaSidebar();
   }catch(e){ /* segue com os valores padrão se falhar */ }
@@ -2652,6 +2652,9 @@ async function abrirEditorAnexo(anexoId){
     catch(e){ return; }
   }
   const img = new Image();
+  img.crossOrigin = "anonymous"; // sem isso, o canvas fica "contaminado" ao desenhar essa imagem
+  // (ela vem de outra origem — Supabase Storage) e toDataURL()/toBlob() falham
+  // silenciosamente depois, quebrando rotação, recorte e "salvar cópia".
   img.onload = () => {
     ED = {
       origemId: anexoId, categoria: original.categoria,
@@ -3481,8 +3484,18 @@ function vSettings(){
     </div>
     <div class="grid g2">
       <label class="f"><span>Cidade</span><input id="cl-cidade" value="${esc(MINHA_CLINICA.cidade)}" placeholder="Para o Pix do portal do paciente"></label>
-      <label class="f"><span>Chave Pix</span><input id="cl-pix" value="${esc(MINHA_CLINICA.chavePix)}" placeholder="CPF, CNPJ, e-mail, telefone ou chave aleatória"></label>
+      <label class="f"><span>Tipo da chave Pix</span>
+        <select id="cl-tipo-pix">
+          <option value="">— Selecione —</option>
+          <option value="cpf" ${MINHA_CLINICA.tipoChavePix==="cpf"?"selected":""}>CPF</option>
+          <option value="cnpj" ${MINHA_CLINICA.tipoChavePix==="cnpj"?"selected":""}>CNPJ</option>
+          <option value="email" ${MINHA_CLINICA.tipoChavePix==="email"?"selected":""}>E-mail</option>
+          <option value="telefone" ${MINHA_CLINICA.tipoChavePix==="telefone"?"selected":""}>Telefone</option>
+          <option value="aleatoria" ${MINHA_CLINICA.tipoChavePix==="aleatoria"?"selected":""}>Chave aleatória</option>
+        </select>
+      </label>
     </div>
+    <label class="f"><span>Chave Pix</span><input id="cl-pix" value="${esc(MINHA_CLINICA.chavePix)}" placeholder="Pode digitar com pontuação — o sistema formata sozinho"></label>
     <button class="btn sm" onclick="saveClinicaPerfil()">Salvar perfil do consultório</button>
   </div>
   ${AUTH_IS_SUPERADMIN?`
@@ -3559,7 +3572,7 @@ async function saveClinicaPerfil(){
     nome, responsavelTecnico:g("cl-resp").trim(), croResponsavel:g("cl-cro").trim(),
     cnpj:g("cl-cnpj").trim(), enderecoCompleto:g("cl-endereco").trim(),
     telefoneWhatsapp:g("cl-whatsapp").trim(), email:g("cl-email").trim(),
-    cidade:g("cl-cidade").trim(), chavePix:g("cl-pix").trim(),
+    cidade:g("cl-cidade").trim(), chavePix:g("cl-pix").trim(), tipoChavePix:g("cl-tipo-pix"),
   });
   await carregarMinhaClinica();
   render();
