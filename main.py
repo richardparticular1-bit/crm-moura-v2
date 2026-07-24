@@ -537,6 +537,43 @@ class ClinicaPerfilIn(BaseModel):
     email: str = ""
     cidade: str = ""
     chavePix: str = ""
+    tipoChavePix: str = ""  # cpf | cnpj | email | telefone | aleatoria
+
+
+def _normalizar_chave_pix(tipo: str, chave: str) -> str:
+    """Formata a chave Pix conforme o tipo declarado. Isso importa de
+    verdade: um CPF e um telefone (DDD+9+número) têm os dois exatamente 11
+    dígitos — sem saber o tipo, não dá pra saber se falta prefixo +55 ou
+    não, e uma chave de telefone salva sem +55 é "estruturalmente válida"
+    no payload (o QR lê normal) mas o banco não reconhece a chave."""
+    import re
+    chave = (chave or "").strip()
+    if not chave or not tipo:
+        return chave
+    if tipo == "cpf":
+        digitos = re.sub(r"\D", "", chave)
+        if len(digitos) != 11:
+            raise HTTPException(422, "CPF inválido para chave Pix — precisa ter 11 dígitos.")
+        return digitos
+    if tipo == "cnpj":
+        digitos = re.sub(r"\D", "", chave)
+        if len(digitos) != 14:
+            raise HTTPException(422, "CNPJ inválido para chave Pix — precisa ter 14 dígitos.")
+        return digitos
+    if tipo == "telefone":
+        digitos = re.sub(r"\D", "", chave)
+        if digitos.startswith("55") and len(digitos) in (12, 13):
+            pass  # já vem com código do país
+        elif len(digitos) in (10, 11):
+            digitos = "55" + digitos
+        else:
+            raise HTTPException(422, "Telefone inválido para chave Pix — informe DDD + número.")
+        return "+" + digitos
+    if tipo == "email":
+        if "@" not in chave or "." not in chave.split("@")[-1]:
+            raise HTTPException(422, "E-mail inválido para chave Pix.")
+        return chave.lower()
+    return chave  # aleatoria (UUID) — mantém como veio
 
 
 def _path_logo_clinica(clinica_id: int) -> str:
@@ -554,7 +591,8 @@ def get_clinica(request: Request):
         return {
             "nome": c.nome, "responsavelTecnico": c.responsavelTecnico, "croResponsavel": c.croResponsavel,
             "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
-            "email": c.email, "cidade": c.cidade, "chavePix": c.chavePix, "logoUrl": logo_url,
+            "email": c.email, "cidade": c.cidade, "chavePix": c.chavePix, "tipoChavePix": c.tipoChavePix,
+            "logoUrl": logo_url,
         }
 
 
@@ -564,6 +602,7 @@ def update_clinica(data: ClinicaPerfilIn, request: Request):
     nome = data.nome.strip()
     if not nome:
         raise HTTPException(422, "Informe o nome da clínica.")
+    chave_normalizada = _normalizar_chave_pix(data.tipoChavePix.strip(), data.chavePix)
     with SessionLocal() as db:
         c = db.get(Clinica, quem.clinicaId)
         if not c:
@@ -576,7 +615,8 @@ def update_clinica(data: ClinicaPerfilIn, request: Request):
         c.telefoneWhatsapp = data.telefoneWhatsapp.strip()
         c.email = data.email.strip()
         c.cidade = data.cidade.strip()
-        c.chavePix = data.chavePix.strip()
+        c.chavePix = chave_normalizada
+        c.tipoChavePix = data.tipoChavePix.strip()
         db.commit()
     return {"ok": True}
 
