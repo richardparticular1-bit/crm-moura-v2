@@ -144,6 +144,7 @@ class Clinica(Base):
     email: Mapped[str] = mapped_column(String(120), default="")              # e-mail institucional da clínica
     cidade: Mapped[str] = mapped_column(String(60), default="")   # usado no payload do Pix (campo "merchant city")
     chavePix: Mapped[str] = mapped_column(String(140), default="")  # CPF/CNPJ/e-mail/telefone/chave aleatória
+    tipoChavePix: Mapped[str] = mapped_column(String(20), default="")  # cpf | cnpj | email | telefone | aleatoria
 
 
 class Plataforma(Base):
