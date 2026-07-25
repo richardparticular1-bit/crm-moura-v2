@@ -108,6 +108,30 @@ a.link{color:var(--teal-700)}
 .actions-list b{width:24px;text-align:right;font-variant-numeric:tabular-nums;color:var(--amber)}
 .actions-list b.zero{color:#cbd5e1}
 .actions-list .go{margin-left:auto;color:var(--teal-700);font-size:12px;font-weight:600}
+/* agenda em grade (timeline semanal estilo referência) */
+.tg-wrap{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.tg-scroll{overflow:auto;max-height:calc(100dvh - 310px);min-height:380px}
+.tg-head{display:grid;position:sticky;top:0;z-index:35;border-bottom:1px solid var(--line)}
+.tg-hcell{background:#fff;padding:7px 4px;text-align:center;border-left:1px solid #f1f5f9;cursor:pointer}
+.tg-hcell .dow{font-size:10px;font-weight:700;color:var(--mut);text-transform:uppercase;letter-spacing:.4px}
+.tg-hcell .dnum{font-size:14px;font-weight:700;color:var(--ink)}
+.tg-hcell.today .dnum{color:var(--teal-700)}
+.tg-hcell.today{box-shadow:inset 0 -2px 0 var(--teal-700)}
+.tg-corner{background:#fff;position:sticky;left:0;z-index:36}
+.tg-body{display:grid}
+.tg-times{position:sticky;left:0;z-index:25;background:#fff;border-right:1px solid var(--line)}
+.tg-time-label{position:absolute;right:5px;transform:translateY(-50%);font-size:10px;color:var(--soft);font-variant-numeric:tabular-nums}
+.tg-col{position:relative;border-left:1px solid #f1f5f9}
+.tg-col.dom{background:#f8fafc}
+.tg-hora-linha{position:absolute;left:0;right:0;height:1px;background:#eef2f6;pointer-events:none}
+.tg-shade{position:absolute;left:0;right:0;background:rgba(148,163,184,.12);pointer-events:none}
+.tg-ev{position:absolute;border-radius:6px;padding:2px 5px;font-size:10.5px;line-height:1.25;overflow:hidden;cursor:grab;user-select:none;-webkit-user-select:none;box-shadow:0 1px 2px rgba(15,23,42,.10);border-left:3px solid #64748b;background:#f1f5f9}
+.tg-ev b{font-size:10px;font-variant-numeric:tabular-nums;display:block}
+.tg-ev.dragging{opacity:.8;cursor:grabbing;z-index:30;box-shadow:0 8px 20px rgba(15,23,42,.3)}
+.tg-ev.faltou-ev,.tg-ev.concluido-ev{opacity:.6}
+.tg-now{position:absolute;left:0;right:0;height:2px;background:#f97316;z-index:20;pointer-events:none}
+.tg-now::before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:#f97316}
+.tg-drag-hint{position:fixed;z-index:60;background:var(--ink);color:#fff;font-size:12px;padding:4px 10px;border-radius:8px;pointer-events:none;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* kanban */
 .kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 @media(max-width:640px){.kanban{grid-template-columns:1fr}}
@@ -507,6 +531,7 @@ function render(){
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
+  if(TAB==="agenda" && AGENDA_VIEW==="semana" && AGENDA_SEARCH.trim().length<2) tgAposRender();
   if(TAB==="profissionais") DB.profissionais.forEach(p=>{ if(!ASSINATURA_PROF_CACHE[p.id]) carregarAssinaturaProfissional(p.id); });
 }
 
@@ -777,37 +802,262 @@ function startOfWeek(iso){
   d.setDate(d.getDate()-dow);
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 }
+
+/* ── AGENDA SEMANAL EM GRADE (timeline com arrastar-e-soltar) ──
+   Grade de horários estilo agenda profissional: eixo de horas na vertical,
+   7 colunas de dias, cada consulta é um bloco posicionado e dimensionado
+   pela duração. Arrastar um bloco muda dia/horário (PUT na API — a
+   validação de conflito do backend continua valendo e desfaz o arrasto
+   com aviso). Clicar num espaço vago abre "Nova consulta" já com data e
+   hora preenchidas. Toque no celular: segurar ~¼s inicia o arrasto;
+   toque rápido abre a consulta; deslizar normal rola a grade. */
+const TG_HORA_INI = 7;   // grade começa às 07:00
+const TG_HORA_FIM = 20;  // ...e termina às 20:00
+const TG_PX_MIN = 0.9;   // altura de cada minuto em px (54px por hora)
+const TG_SNAP = 15;      // arrasto e clique em slot arredondam pra 15 min
+let TG_DRAG = null;         // estado do arrasto em andamento (null = nenhum)
+let TG_SCROLL_TOP = null;   // preserva a rolagem da grade entre re-renders
+let TG_NOW_TIMER = null;    // timer que move a linha do "agora" a cada minuto
+let TG_SUPPRESS_CLICK = false; // suprime o click sintético que o navegador dispara após um arrasto
+
+function tgMin(hhmm){ const p=(hhmm||"0:0").split(":"); return (parseInt(p[0])||0)*60+(parseInt(p[1])||0); }
+function tgHHMM(min){ return String(Math.floor(min/60)).padStart(2,"0")+":"+String(min%60).padStart(2,"0"); }
+
+function tgLayoutDia(appts){
+  // Distribui consultas sobrepostas em colunas lado a lado dentro do dia.
+  // Cada "cluster" de eventos que se tocam no tempo divide a largura por
+  // igual; eventos sem sobreposição ocupam a largura toda.
+  const evs = appts.map(a=>{
+    const ini = tgMin(a.time);
+    return { a, ini, fim: ini + (a.duracaoMinutos||60) };
+  }).sort((x,y)=> x.ini-y.ini || y.fim-x.fim);
+  const out = [];
+  let cluster = [], colEnds = [];
+  const flush = ()=>{
+    const n = Math.max(1, colEnds.length);
+    cluster.forEach(e=>{ e.ncols = n; });
+    out.push(...cluster);
+    cluster = []; colEnds = [];
+  };
+  for(const e of evs){
+    if(cluster.length && colEnds.every(f=>f<=e.ini)) flush();
+    let col = colEnds.findIndex(f=>f<=e.ini);
+    if(col===-1){ col = colEnds.length; colEnds.push(e.fim); }
+    else colEnds[col] = e.fim;
+    e.col = col;
+    cluster.push(e);
+  }
+  if(cluster.length) flush();
+  return out;
+}
+
 function vAgendaSemana(){
   const start = startOfWeek(AGENDA_DAY);
   const days = Array.from({length:7},(_,i)=>addDays(start,i));
   const dowNames = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
   const t = todayISO();
-  return `<div class="daynav">
-    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,-7);render()">${IC.left}</button>
-    <span style="font-size:13px;font-weight:600;color:#334155">${fmtDate(days[0])} – ${fmtDate(days[6])}</span>
-    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,7);render()">${IC.right}</button>
-    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
-  </div>
-  <div class="grid" style="grid-template-columns:repeat(7,1fr);gap:6px">
-    ${days.map((d,i)=>{
-      const dayAppts = DB.appointments.filter(a=>a.date===d && a.status!=="cancelado").sort((a,b)=>a.time.localeCompare(b.time));
-      const isToday = d===t;
-      return `<div class="card" style="padding:8px;min-height:120px;${isToday?"border-color:var(--teal-700);border-width:2px":""}">
-        <div style="text-align:center;margin-bottom:6px">
-          <div style="font-size:10px;color:var(--mut);font-weight:600">${dowNames[i]}</div>
-          <button onclick="AGENDA_DAY='${d}';AGENDA_VIEW='dia';render()" style="font-size:13px;font-weight:700;color:${isToday?"var(--teal-700)":"var(--ink)"}">${d.slice(8)}</button>
-        </div>
-        ${dayAppts.length===0?`<div style="text-align:center;font-size:11px;color:#cbd5e1;padding:6px 0">livre</div>`:
-          dayAppts.slice(0,4).map(a=>{
-            const prof = a.profissionalId?profById(a.profissionalId):null;
-            return `<div style="font-size:10px;background:${prof?prof.cor+"22":"#f1f5f9"};border-left:2px solid ${prof?prof.cor:"#94a3b8"};border-radius:4px;padding:3px 5px;margin-bottom:3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" title="${esc(pName(a.patientId))} - ${esc(a.procedure)}" onclick="openApptForm('${a.id}')">
-              <b>${a.time}</b> ${esc(pName(a.patientId).split(" ")[0])}
-            </div>`;
-          }).join("") + (dayAppts.length>4?`<div style="font-size:10px;color:var(--mut);text-align:center">+${dayAppts.length-4} mais</div>`:"")
-        }
+  const iniMin = TG_HORA_INI*60, fimMin = TG_HORA_FIM*60;
+  const colH = (fimMin-iniMin)*TG_PX_MIN;
+  const cols = "44px repeat(7,minmax(96px,1fr))";
+  const horas = [];
+  for(let h=TG_HORA_INI; h<=TG_HORA_FIM; h++){
+    horas.push(`<span class="tg-time-label" style="top:${(h*60-iniMin)*TG_PX_MIN}px">${String(h).padStart(2,"0")}h</span>`);
+  }
+  const linhas = [];
+  for(let h=TG_HORA_INI+1; h<TG_HORA_FIM; h++){
+    linhas.push(`<div class="tg-hora-linha" style="top:${(h*60-iniMin)*TG_PX_MIN}px"></div>`);
+  }
+  const linhasHTML = linhas.join("");
+  const agora = new Date();
+  const nowMin = agora.getHours()*60 + agora.getMinutes();
+  const colsHTML = days.map((d,i)=>{
+    const evs = tgLayoutDia(DB.appointments.filter(a=>a.date===d && a.status!=="cancelado"));
+    const blocos = evs.map(e=>{
+      const a = e.a;
+      const prof = a.profissionalId ? profById(a.profissionalId) : null;
+      const cor = prof ? prof.cor : "#64748b";
+      const top = Math.max(0, (e.ini-iniMin)*TG_PX_MIN);
+      const alt = Math.max(18, (Math.min(e.fim,fimMin)-iniMin)*TG_PX_MIN - top);
+      const wPct = 100/e.ncols, lPct = e.col*wPct;
+      const pac = pName(a.patientId);
+      const extraCls = (a.status==="faltou"||a.status==="concluido") ? a.status+"-ev" : "";
+      return `<div class="tg-ev ${extraCls}" data-id="${a.id}"
+        style="top:${top}px;height:${alt}px;left:calc(${lPct}% + 2px);width:calc(${wPct}% - 4px);border-left-color:${cor};background:${prof?cor+"22":"#f1f5f9"}"
+        onmousedown="tgDragStart(event,'${a.id}')" ontouchstart="tgDragStart(event,'${a.id}')"
+        title="${esc(pac)} · ${a.time} (${a.duracaoMinutos||60}min) · ${esc(a.procedure||"")}${prof?" · "+esc(prof.nome):""} — ${STATUS[a.status]||a.status}">
+        <b>${a.time}–${tgHHMM(tgMin(a.time)+(a.duracaoMinutos||60))}</b>${esc(pac.split(" ")[0])}${prof?`<span style="display:block;font-size:9.5px;color:${cor}">${esc(prof.nome.split(" ")[0])}</span>`:""}
       </div>`;
-    }).join("")}
-  </div>`;
+    }).join("");
+    const shade = `<div class="tg-shade" style="top:${(12*60-iniMin)*TG_PX_MIN}px;height:${60*TG_PX_MIN}px"></div>`;
+    const nowLine = (d===t && nowMin>=iniMin && nowMin<=fimMin)
+      ? `<div class="tg-now" id="tg-now-line" style="top:${(nowMin-iniMin)*TG_PX_MIN}px"></div>` : "";
+    return `<div class="tg-col ${i===0?"dom":""}" data-date="${d}" style="height:${colH}px" onclick="tgSlotClick(event,'${d}')">${linhasHTML}${shade}${blocos}${nowLine}</div>`;
+  }).join("");
+  const headHTML = days.map((d,i)=>{
+    return `<div class="tg-hcell ${d===t?"today":""}" onclick="AGENDA_DAY='${d}';AGENDA_VIEW='dia';render()" title="Abrir o dia ${fmtDate(d)}">
+      <div class="dow">${dowNames[i]}</div><div class="dnum">${d.slice(8)}</div>
+    </div>`;
+  }).join("");
+  return `<div class="daynav" style="flex-wrap:wrap">
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="TG_SCROLL_TOP=null;AGENDA_DAY=addDays(AGENDA_DAY,-7);render()">${IC.left}</button>
+    <span style="font-size:13px;font-weight:600;color:#334155">${fmtDate(days[0])} – ${fmtDate(days[6])}</span>
+    <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="TG_SCROLL_TOP=null;AGENDA_DAY=addDays(AGENDA_DAY,7);render()">${IC.right}</button>
+    <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="TG_SCROLL_TOP=null;AGENDA_DAY=todayISO();render()">Hoje</button>
+    <span class="meta" style="margin-left:auto">Arraste uma consulta pra mudar dia/horário · clique num espaço vago pra agendar</span>
+  </div>
+  <div class="tg-wrap"><div class="tg-scroll" id="tg-scroll" onscroll="TG_SCROLL_TOP=this.scrollTop">
+    <div class="tg-head" style="grid-template-columns:${cols}"><div class="tg-corner"></div>${headHTML}</div>
+    <div class="tg-body" style="grid-template-columns:${cols}">
+      <div class="tg-times" style="position:sticky;height:${colH}px">${horas.join("")}</div>
+      ${colsHTML}
+    </div>
+  </div></div>`;
+}
+
+function tgAposRender(){
+  const sc = document.getElementById("tg-scroll");
+  if(sc){
+    if(TG_SCROLL_TOP !== null){
+      sc.scrollTop = TG_SCROLL_TOP;
+    } else {
+      const d = new Date();
+      const alvo = (d.getHours()*60 + d.getMinutes() - TG_HORA_INI*60 - 60)*TG_PX_MIN;
+      sc.scrollTop = Math.max(0, alvo);
+      TG_SCROLL_TOP = sc.scrollTop;
+    }
+  }
+  if(!TG_NOW_TIMER){
+    TG_NOW_TIMER = setInterval(()=>{
+      const line = document.getElementById("tg-now-line");
+      if(!line) return;
+      const d = new Date();
+      line.style.top = ((d.getHours()*60 + d.getMinutes() - TG_HORA_INI*60)*TG_PX_MIN)+"px";
+    }, 60000);
+  }
+}
+
+function tgSlotClick(ev, dateISO){
+  if(TG_SUPPRESS_CLICK) return;
+  if(ev.target.closest(".tg-ev")) return;
+  if(DB.patients.length===0){ toast("Cadastre um paciente antes de criar consultas."); return; }
+  const r = ev.currentTarget.getBoundingClientRect();
+  const y = ev.clientY - r.top;
+  let min = TG_HORA_INI*60 + Math.round((y/TG_PX_MIN)/TG_SNAP)*TG_SNAP;
+  min = Math.max(TG_HORA_INI*60, Math.min(TG_HORA_FIM*60 - TG_SNAP, min));
+  openApptForm(null, null, dateISO, tgHHMM(min));
+}
+
+function tgPoint(e){
+  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  return { x: t.clientX, y: t.clientY };
+}
+function tgDragStart(ev, id){
+  if(ev.type==="mousedown" && ev.button!==0) return;
+  if(TG_DRAG) return;
+  const a = DB.appointments.find(x=>x.id===id); if(!a) return;
+  const el = ev.currentTarget;
+  const p = tgPoint(ev);
+  TG_DRAG = {
+    id, a, el,
+    startX: p.x, startY: p.y,
+    grabOff: p.y - el.getBoundingClientRect().top,
+    moved: false,
+    ativo: ev.type==="mousedown", // no toque, só ativa depois do "segurar"
+    holdTimer: null,
+    colsEls: Array.from(document.querySelectorAll(".tg-col")),
+    dur: a.duracaoMinutos||60,
+    novoDate: a.date, novoIni: tgMin(a.time),
+    hint: null,
+  };
+  if(ev.type==="touchstart"){
+    TG_DRAG.holdTimer = setTimeout(()=>{ if(TG_DRAG){ TG_DRAG.ativo = true; TG_DRAG.el.classList.add("dragging"); } }, 260);
+  } else {
+    ev.preventDefault(); // evita seleção de texto ao arrastar com o mouse
+  }
+  document.addEventListener("mousemove", tgDragMove);
+  document.addEventListener("mouseup", tgDragEnd);
+  document.addEventListener("touchmove", tgDragMove, {passive:false});
+  document.addEventListener("touchend", tgDragEnd);
+  document.addEventListener("touchcancel", tgDragEnd);
+}
+function _tgLimparListeners(){
+  document.removeEventListener("mousemove", tgDragMove);
+  document.removeEventListener("mouseup", tgDragEnd);
+  document.removeEventListener("touchmove", tgDragMove);
+  document.removeEventListener("touchend", tgDragEnd);
+  document.removeEventListener("touchcancel", tgDragEnd);
+}
+function tgDragMove(ev){
+  const d = TG_DRAG; if(!d) return;
+  const p = tgPoint(ev);
+  const dx = p.x - d.startX, dy = p.y - d.startY;
+  if(!d.ativo){
+    // toque ainda no período de "segurar": se o dedo andou, é rolagem — cancela o arrasto
+    if(Math.abs(dx) > 8 || Math.abs(dy) > 8){
+      clearTimeout(d.holdTimer);
+      _tgLimparListeners();
+      TG_DRAG = null;
+    }
+    return;
+  }
+  ev.preventDefault();
+  if(!d.moved && (Math.abs(dx) > 4 || Math.abs(dy) > 4)){
+    d.moved = true;
+    d.el.classList.add("dragging");
+    d.el.style.left = "2px";
+    d.el.style.width = "calc(100% - 4px)";
+    if(!d.hint){
+      d.hint = document.createElement("div");
+      d.hint.className = "tg-drag-hint";
+      document.body.appendChild(d.hint);
+    }
+  }
+  if(!d.moved) return;
+  // coluna (dia) sob o ponteiro; fora da grade, mantém a coluna atual
+  let alvo = null;
+  for(const c of d.colsEls){
+    const r = c.getBoundingClientRect();
+    if(p.x >= r.left && p.x <= r.right){ alvo = {c, r}; break; }
+  }
+  if(!alvo){
+    const c = d.el.parentElement;
+    alvo = {c, r: c.getBoundingClientRect()};
+  }
+  const iniMin = TG_HORA_INI*60;
+  let novo = iniMin + Math.round(((p.y - alvo.r.top - d.grabOff)/TG_PX_MIN)/TG_SNAP)*TG_SNAP;
+  novo = Math.max(iniMin, Math.min(TG_HORA_FIM*60 - d.dur, novo));
+  d.novoIni = novo;
+  d.novoDate = alvo.c.dataset.date || d.novoDate;
+  if(d.el.parentElement !== alvo.c) alvo.c.appendChild(d.el);
+  d.el.style.top = ((novo-iniMin)*TG_PX_MIN)+"px";
+  if(d.hint){
+    d.hint.style.left = (p.x + 14)+"px";
+    d.hint.style.top = (p.y - 32)+"px";
+    d.hint.textContent = `${fmtDate(d.novoDate)} · ${tgHHMM(novo)}–${tgHHMM(novo + d.dur)}`;
+  }
+}
+async function tgDragEnd(){
+  const d = TG_DRAG;
+  TG_DRAG = null;
+  if(!d) return;
+  clearTimeout(d.holdTimer);
+  _tgLimparListeners();
+  if(d.hint) d.hint.remove();
+  d.el.classList.remove("dragging");
+  TG_SUPPRESS_CLICK = true;
+  setTimeout(()=>{ TG_SUPPRESS_CLICK = false; }, 80);
+  if(!d.moved){
+    // clique/toque simples (sem arrastar): abre a consulta pra edição
+    openApptForm(d.id);
+    return;
+  }
+  const novoTime = tgHHMM(d.novoIni);
+  if(d.novoDate === d.a.date && novoTime === d.a.time){ render(); return; }
+  try{
+    await api("PUT", `/appointments/${d.id}`, {...d.a, date: d.novoDate, time: novoTime});
+    toast(`Consulta de ${pName(d.a.patientId).split(" ")[0]} movida pra ${fmtDate(d.novoDate)} às ${novoTime}. 📅`);
+  }catch(e){ /* toast do api() já avisou (ex: conflito de horário do backend) — o reload abaixo desfaz o arrasto */ }
+  await reloadAll();
 }
 
 function vAgendaMes(){
@@ -918,7 +1168,7 @@ function agendarPaciente(pid){
       <button class="btn" onclick="closeModal();openApptForm(null,'${pid}')">Agendar mesmo assim</button>
     </div>`);
 }
-function openApptForm(id, patientId){
+function openApptForm(id, patientId, presetDate, presetTime){
   const a = id ? DB.appointments.find(x=>x.id===id) : null;
   const preSelPid = a ? a.patientId : (patientId || null);
   const preSelPac = preSelPid ? pById(preSelPid) : null;
@@ -928,8 +1178,8 @@ function openApptForm(id, patientId){
     <label class="f"><span>Paciente</span><select id="a-pat" onchange="_apptFormPreencherProntuario()">${ps.map(p=>`<option value="${p.id}" ${preSelPid===p.id?"selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
     <label class="f"><span>Dentista responsável</span><select id="a-prof"><option value="">— Sem preferência —</option>${profs.map(p=>`<option value="${p.id}" ${a&&a.profissionalId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}</select></label>
     <div class="grid g2">
-      <label class="f"><span>Data</span><input type="date" id="a-date" value="${a?a.date:AGENDA_DAY}"></label>
-      <label class="f"><span>Horário</span><input type="time" id="a-time" value="${a?a.time:"09:00"}"></label>
+      <label class="f"><span>Data</span><input type="date" id="a-date" value="${a?a.date:(presetDate||AGENDA_DAY)}"></label>
+      <label class="f"><span>Horário</span><input type="time" id="a-time" value="${a?a.time:(presetTime||"09:00")}"></label>
     </div>
     <div class="grid g2">
       <label class="f"><span>Duração (minutos)</span><input type="number" id="a-dur" value="${a?(a.duracaoMinutos||60):60}" min="15" step="15"></label>
@@ -2344,7 +2594,7 @@ async function imprimirProntuario(pid){
         <div style="font-size:12.5px;white-space:pre-wrap">${esc(e.conteudo)}</div>
       </div>`).join("")}
   `;
-  _abrirDocImpressao(`Prontuário - ${p.name}`, corpo);
+  _abrirDocImpressao(win, `Prontuário - ${p.name}`, corpo);
 }
 function vFicha(){
   const p = pById(FICHA_ID);
@@ -3659,9 +3909,6 @@ async function saveMarcaPlataforma(){
   toast("Marca da plataforma salva.");
 }
 function handleLogoFileInput(inputEl, tipo){
-  // tipo: "clinica" | "plataforma". Redesenha a imagem num canvas antes de
-  // enviar — normaliza qualquer formato (jpg, webp...) para PNG, que é o
-  // único formato que o backend aceita nesse endpoint, e já reduz o tamanho.
   const file = inputEl.files && inputEl.files[0];
   if(!file) return;
   if(!file.type.startsWith("image/")){ toast("Selecione uma imagem."); return; }
