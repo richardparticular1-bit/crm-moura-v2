@@ -1572,37 +1572,38 @@ function _categoriaDente(numero){
 }
 function _contornoDenteSVG(categoria, arch, T, crownY0, crownH, raizY0, raizH){
   // Contorno único (coroa arredondada + raiz simples ou dupla), com curvas
-  // suaves em vez de formas geométricas — todos os pontos ficam garantidos
-  // dentro de [0,T] em x, então a curva nunca é cortada pela viewBox (uma
-  // curva quadrática sempre fica dentro do "casco convexo" dos seus 3 pontos).
-  const cima = arch === "upper"; // espelha verticalmente pro arco superior (raiz pra cima, coroa pra baixo)
-  const centroY = (crownY0 + crownH/2 + raizY0 + raizH/2) / 2;
-  const fy = (y) => cima ? (2*centroY - y) : y;
+  // suaves em vez de formas geométricas. crownY0/raizY0 já chegam
+  // pré-posicionados pelo chamador conforme o arco (raiz antes da coroa no
+  // superior, depois no inferior) — aqui só decidimos, sem espelhar de novo,
+  // de que lado fica o "bojo" externo da coroa (lado oposto à raiz) e de
+  // que lado fica a ponta da raiz, direto a partir do arco.
   const nRaizes = categoria === "molar" ? 2 : 1;
-  const domeTop = crownY0 - crownH*0.10;
-  const shoulderY = crownY0 + crownH*0.15;
-  const waistY = crownY0 + crownH*0.85;
-  const rootTipY = raizY0 + raizH;
-  const notchY = raizY0 + raizH*0.35;
-  const midR = (a,b) => a*0.7+b*0.3;
+  const upper = arch === "upper";
+  const shoulderY = upper ? crownY0 + crownH*0.85 : crownY0 + crownH*0.15;   // ombro do lado do bojo
+  const waistY     = upper ? crownY0 + crownH*0.15 : crownY0 + crownH*0.85;  // ombro do lado da raiz
+  const domeTop    = upper ? crownY0 + crownH + crownH*0.10 : crownY0 - crownH*0.10; // bojo externo
+  const rootAttachY = upper ? raizY0 + raizH : raizY0;   // onde a raiz encosta na coroa
+  const rootTipY     = upper ? raizY0 : raizY0 + raizH;   // ponta da raiz
+  const notchY = rootAttachY + (rootTipY - rootAttachY)*0.65; // reentrância entre as raízes do molar
+  const midR = (a,b) => a*0.65 + b*0.35; // ponto intermediário mais perto da ponta da raiz
   let d;
   if(nRaizes === 1){
-    d = `M ${T*0.12},${fy(shoulderY)}
-         Q ${T*0.5},${fy(domeTop)} ${T*0.88},${fy(shoulderY)}
-         Q ${T*0.94},${fy(waistY)} ${T*0.64},${fy(raizY0)}
-         Q ${T*0.60},${fy(midR(rootTipY,raizY0))} ${T*0.5},${fy(rootTipY)}
-         Q ${T*0.40},${fy(midR(rootTipY,raizY0))} ${T*0.36},${fy(raizY0)}
-         Q ${T*0.06},${fy(waistY)} ${T*0.12},${fy(shoulderY)} Z`;
+    d = `M ${T*0.12},${shoulderY}
+         Q ${T*0.5},${domeTop} ${T*0.88},${shoulderY}
+         Q ${T*0.94},${waistY} ${T*0.64},${rootAttachY}
+         Q ${T*0.60},${midR(rootTipY,rootAttachY)} ${T*0.5},${rootTipY}
+         Q ${T*0.40},${midR(rootTipY,rootAttachY)} ${T*0.36},${rootAttachY}
+         Q ${T*0.06},${waistY} ${T*0.12},${shoulderY} Z`;
   } else {
-    d = `M ${T*0.10},${fy(shoulderY)}
-         Q ${T*0.5},${fy(domeTop)} ${T*0.90},${fy(shoulderY)}
-         Q ${T*0.96},${fy(waistY)} ${T*0.78},${fy(raizY0)}
-         Q ${T*0.76},${fy(midR(rootTipY,raizY0))} ${T*0.65},${fy(rootTipY)}
-         Q ${T*0.60},${fy(midR(rootTipY,raizY0))} ${T*0.58},${fy(notchY)}
-         Q ${T*0.5},${fy(raizY0+raizH*0.2)} ${T*0.42},${fy(notchY)}
-         Q ${T*0.40},${fy(midR(rootTipY,raizY0))} ${T*0.35},${fy(rootTipY)}
-         Q ${T*0.24},${fy(midR(rootTipY,raizY0))} ${T*0.22},${fy(raizY0)}
-         Q ${T*0.04},${fy(waistY)} ${T*0.10},${fy(shoulderY)} Z`;
+    d = `M ${T*0.10},${shoulderY}
+         Q ${T*0.5},${domeTop} ${T*0.90},${shoulderY}
+         Q ${T*0.96},${waistY} ${T*0.78},${rootAttachY}
+         Q ${T*0.76},${midR(rootTipY,rootAttachY)} ${T*0.65},${rootTipY}
+         Q ${T*0.60},${midR(rootTipY,rootAttachY)} ${T*0.58},${notchY}
+         Q ${T*0.5},${rootAttachY+(notchY-rootAttachY)*0.6} ${T*0.42},${notchY}
+         Q ${T*0.40},${midR(rootTipY,rootAttachY)} ${T*0.35},${rootTipY}
+         Q ${T*0.24},${midR(rootTipY,rootAttachY)} ${T*0.22},${rootAttachY}
+         Q ${T*0.04},${waistY} ${T*0.10},${shoulderY} Z`;
   }
   return `<path d="${d.replace(/\s+/g,' ')}" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>`;
 }
