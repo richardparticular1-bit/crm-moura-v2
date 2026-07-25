@@ -1558,14 +1558,68 @@ const STATUS_DENTE_LABEL = { nenhum:"Nenhum (limpar)", ausente:"Ausente/Extraíd
 
 const FACE_STATUS_SIGLA = { cariado:"C", restaurado:"R", fraturado:"Fx" };
 
+function _categoriaDente(numero){
+  // Último dígito = posição no quadrante (1..8 permanente, 1..5 decíduo).
+  // Isso já diz o tipo de dente independente de qual quadrante é.
+  const n = parseInt(numero, 10);
+  const decidua = Math.floor(n/10) >= 5;
+  const pos = n % 10;
+  if(pos <= 2) return "incisivo";
+  if(pos === 3) return "canino";
+  if(decidua) return "molar"; // decíduo só tem incisivo/canino/molar (sem pré-molar)
+  if(pos === 4 || pos === 5) return "premolar";
+  return "molar";
+}
+function _raizSVG(categoria, arch, T, y0, h){
+  // arch="upper": a raiz afina pra cima (rumo à gengiva, no topo do desenho).
+  // arch="lower": afina pra baixo. attachY é a borda onde encosta na coroa.
+  const paraCima = arch === "upper";
+  const attachY = paraCima ? y0+h : y0;
+  const tipY = paraCima ? y0 : y0+h;
+  if(categoria === "molar"){
+    const ltipX = T*0.28, rtipX = T*0.72;
+    return `<path d="M${T*0.14},${attachY} L${T*0.44},${attachY} L${ltipX},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>
+      <path d="M${T*0.56},${attachY} L${T*0.86},${attachY} L${rtipX},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>`;
+  }
+  return `<path d="M${T*0.3},${attachY} L${T*0.7},${attachY} L${T*0.5},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>`;
+}
+function _implanteSVG(T, y0, h){
+  // Parafuso no lugar da raiz — rosca representada por linhas horizontais
+  const x1 = T*0.4, x2 = T*0.6;
+  let roscas = "";
+  for(let i=1;i<4;i++){ const y = y0 + h*(i/4); roscas += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#0f766e" stroke-width="0.8"/>`; }
+  return `<rect x="${x1}" y="${y0}" width="${x2-x1}" height="${h}" fill="#d1fae5" stroke="#0f766e" stroke-width="1"/>${roscas}`;
+}
+function _cuspsSVG(categoria, arch, T, crownY0, crownH){
+  const naBorda = arch === "upper" ? crownY0+crownH : crownY0; // borda externa da coroa, oposta à raiz
+  const dir = arch === "upper" ? 1 : -1;
+  if(categoria === "canino"){
+    const cx = T/2;
+    return `<path d="M${cx-4},${naBorda} L${cx+4},${naBorda} L${cx},${naBorda+dir*5} Z" fill="#fff" stroke="#94a3b8" stroke-width="0.6"/>`;
+  }
+  if(categoria === "premolar"){
+    return [T*0.32, T*0.68].map(cx=>`<circle cx="${cx}" cy="${naBorda+dir*1.5}" r="2.6" fill="#fff" stroke="#94a3b8" stroke-width="0.5"/>`).join("");
+  }
+  if(categoria === "molar"){
+    return [T*0.22, T*0.5, T*0.78].map(cx=>`<circle cx="${cx}" cy="${naBorda+dir*1.5}" r="2.8" fill="#fff" stroke="#94a3b8" stroke-width="0.5"/>`).join("");
+  }
+  return ""; // incisivo: borda lisa, sem cúspide
+}
 function _odontoToothSVG(numero, estadoDente, bloco, interactive){
-  const T = 40, cell = T/3, LABEL_H = 12; // LABEL_H: espaço reservado no topo para o número do dente
+  const T = 40, cell = T/3, LABEL_H = 12, ROOT_H = 15;
   const faces = (estadoDente && estadoDente.faces) || {};
   const denteStatus = estadoDente && estadoDente.dente;
   const topFace = bloco.arch === "upper" ? "vestibular" : "lingual";
   const bottomFace = bloco.arch === "upper" ? "lingual" : "vestibular";
   const leftFace = bloco.mesial === "right" ? "distal" : "mesial";
   const rightFace = bloco.mesial === "right" ? "mesial" : "distal";
+  const categoria = _categoriaDente(numero);
+  const upper = bloco.arch === "upper";
+  // Raiz fica entre o número e a coroa no arco superior (rumo à gengiva, no
+  // topo), e entre a coroa e o rodapé no arco inferior — mesma lógica
+  // anatômica de sempre: a raiz aponta pra "fora" do arco.
+  const crownY0 = upper ? LABEL_H+ROOT_H : LABEL_H;
+  const raizY0 = upper ? LABEL_H : LABEL_H+T;
   const cellRect = (face, x, y) => {
     const st = faces[face];
     const cor = st ? FACE_COR[st] : "#fff";
@@ -1573,21 +1627,30 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
     const sigla = st ? `<text x="${x+cell/2}" y="${y+cell/2+2.6}" font-size="7.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="sans-serif" pointer-events="none">${FACE_STATUS_SIGLA[st]||""}</text>` : "";
     return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${st?" - "+STATUS_FACE_LABEL[st]:""}</title></rect>${sigla}`;
   };
-  // A grade de faces (e o badge abaixo dela) é desenhada deslocada em LABEL_H,
-  // deixando de fato espaço dentro do viewBox para o número do dente no topo —
-  // antes ele ficava em y=-4, fora do viewBox, e vivia cortado na fileira de cima.
-  let svg = `<svg width="${T}" height="${T+14+LABEL_H}" viewBox="0 0 ${T} ${T+14+LABEL_H}">`;
-  svg += cellRect(topFace, cell, LABEL_H);
-  svg += cellRect(leftFace, 0, cell+LABEL_H);
-  svg += cellRect("oclusal", cell, cell+LABEL_H);
-  svg += cellRect(rightFace, cell*2, cell+LABEL_H);
-  svg += cellRect(bottomFace, cell, cell*2+LABEL_H);
+  const totalH = LABEL_H + ROOT_H + T + 14;
+  let svg = `<svg width="${T}" height="${totalH}" viewBox="0 0 ${T} ${totalH}">`;
+
+  const ausente = denteStatus === "ausente";
+  const implante = denteStatus === "implante";
+
+  svg += `<g ${ausente?'opacity="0.32"':""}>`;
+  svg += implante ? _implanteSVG(T, raizY0, ROOT_H) : _raizSVG(categoria, bloco.arch, T, raizY0, ROOT_H);
+  svg += _cuspsSVG(categoria, bloco.arch, T, crownY0, T);
+  svg += cellRect(topFace, cell, crownY0);
+  svg += cellRect(leftFace, 0, cell+crownY0);
+  svg += cellRect("oclusal", cell, cell+crownY0);
+  svg += cellRect(rightFace, cell*2, cell+crownY0);
+  svg += cellRect(bottomFace, cell, cell*2+crownY0);
+  svg += `</g>`;
+  if(ausente){
+    // "Apagado" (opacidade reduzida acima) + X sobre o dente inteiro — raiz e coroa
+    const topo = Math.min(raizY0, crownY0) + 2, base = Math.max(raizY0+ROOT_H, crownY0+T) - 2;
+    svg += `<line x1="2" y1="${topo}" x2="${T-2}" y2="${base}" stroke="#64748b" stroke-width="2.2"/><line x1="${T-2}" y1="${topo}" x2="2" y2="${base}" stroke="#64748b" stroke-width="2.2"/>`;
+  }
   if(denteStatus && DENTE_BADGE[denteStatus]){
     const b = DENTE_BADGE[denteStatus];
-    if(denteStatus==="ausente"){
-      svg += `<line x1="1" y1="${1+LABEL_H}" x2="${T-1}" y2="${T-1+LABEL_H}" stroke="#64748b" stroke-width="2.4"/><line x1="${T-1}" y1="${1+LABEL_H}" x2="1" y2="${T-1+LABEL_H}" stroke="#64748b" stroke-width="2.4"/>`;
-    }
-    svg += `<circle cx="${T/2}" cy="${T+7+LABEL_H}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${T+9.5+LABEL_H}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
+    const badgeY = LABEL_H + ROOT_H + T;
+    svg += `<circle cx="${T/2}" cy="${badgeY+7}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${badgeY+9.5}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
   }
   const numClick = interactive ? `onclick="onOdontoDenteClick('${numero}')" style="cursor:pointer"` : "";
   svg += `<text x="${T/2}" y="${LABEL_H-2}" font-size="10" font-weight="700" fill="#334155" text-anchor="middle" font-family="sans-serif" ${numClick}>${numero}</text>`;
