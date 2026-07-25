@@ -1570,40 +1570,48 @@ function _categoriaDente(numero){
   if(pos === 4 || pos === 5) return "premolar";
   return "molar";
 }
-function _raizSVG(categoria, arch, T, y0, h){
-  // arch="upper": a raiz afina pra cima (rumo à gengiva, no topo do desenho).
-  // arch="lower": afina pra baixo. attachY é a borda onde encosta na coroa.
-  const paraCima = arch === "upper";
-  const attachY = paraCima ? y0+h : y0;
-  const tipY = paraCima ? y0 : y0+h;
-  if(categoria === "molar"){
-    const ltipX = T*0.28, rtipX = T*0.72;
-    return `<path d="M${T*0.14},${attachY} L${T*0.44},${attachY} L${ltipX},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>
-      <path d="M${T*0.56},${attachY} L${T*0.86},${attachY} L${rtipX},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>`;
+function _contornoDenteSVG(categoria, arch, T, crownY0, crownH, raizY0, raizH){
+  // Contorno único (coroa arredondada + raiz simples ou dupla), com curvas
+  // suaves em vez de formas geométricas — todos os pontos ficam garantidos
+  // dentro de [0,T] em x, então a curva nunca é cortada pela viewBox (uma
+  // curva quadrática sempre fica dentro do "casco convexo" dos seus 3 pontos).
+  const cima = arch === "upper"; // espelha verticalmente pro arco superior (raiz pra cima, coroa pra baixo)
+  const centroY = (crownY0 + crownH/2 + raizY0 + raizH/2) / 2;
+  const fy = (y) => cima ? (2*centroY - y) : y;
+  const nRaizes = categoria === "molar" ? 2 : 1;
+  const domeTop = crownY0 - crownH*0.10;
+  const shoulderY = crownY0 + crownH*0.15;
+  const waistY = crownY0 + crownH*0.85;
+  const rootTipY = raizY0 + raizH;
+  const notchY = raizY0 + raizH*0.35;
+  const midR = (a,b) => a*0.7+b*0.3;
+  let d;
+  if(nRaizes === 1){
+    d = `M ${T*0.12},${fy(shoulderY)}
+         Q ${T*0.5},${fy(domeTop)} ${T*0.88},${fy(shoulderY)}
+         Q ${T*0.94},${fy(waistY)} ${T*0.64},${fy(raizY0)}
+         Q ${T*0.60},${fy(midR(rootTipY,raizY0))} ${T*0.5},${fy(rootTipY)}
+         Q ${T*0.40},${fy(midR(rootTipY,raizY0))} ${T*0.36},${fy(raizY0)}
+         Q ${T*0.06},${fy(waistY)} ${T*0.12},${fy(shoulderY)} Z`;
+  } else {
+    d = `M ${T*0.10},${fy(shoulderY)}
+         Q ${T*0.5},${fy(domeTop)} ${T*0.90},${fy(shoulderY)}
+         Q ${T*0.96},${fy(waistY)} ${T*0.78},${fy(raizY0)}
+         Q ${T*0.76},${fy(midR(rootTipY,raizY0))} ${T*0.65},${fy(rootTipY)}
+         Q ${T*0.60},${fy(midR(rootTipY,raizY0))} ${T*0.58},${fy(notchY)}
+         Q ${T*0.5},${fy(raizY0+raizH*0.2)} ${T*0.42},${fy(notchY)}
+         Q ${T*0.40},${fy(midR(rootTipY,raizY0))} ${T*0.35},${fy(rootTipY)}
+         Q ${T*0.24},${fy(midR(rootTipY,raizY0))} ${T*0.22},${fy(raizY0)}
+         Q ${T*0.04},${fy(waistY)} ${T*0.10},${fy(shoulderY)} Z`;
   }
-  return `<path d="M${T*0.3},${attachY} L${T*0.7},${attachY} L${T*0.5},${tipY} Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="0.6"/>`;
+  return `<path d="${d.replace(/\s+/g,' ')}" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>`;
 }
 function _implanteSVG(T, y0, h){
-  // Parafuso no lugar da raiz — rosca representada por linhas horizontais
+  // Parafuso sobre a área da raiz — rosca representada por linhas horizontais
   const x1 = T*0.4, x2 = T*0.6;
   let roscas = "";
   for(let i=1;i<4;i++){ const y = y0 + h*(i/4); roscas += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#0f766e" stroke-width="0.8"/>`; }
   return `<rect x="${x1}" y="${y0}" width="${x2-x1}" height="${h}" fill="#d1fae5" stroke="#0f766e" stroke-width="1"/>${roscas}`;
-}
-function _cuspsSVG(categoria, arch, T, crownY0, crownH){
-  const naBorda = arch === "upper" ? crownY0+crownH : crownY0; // borda externa da coroa, oposta à raiz
-  const dir = arch === "upper" ? 1 : -1;
-  if(categoria === "canino"){
-    const cx = T/2;
-    return `<path d="M${cx-4},${naBorda} L${cx+4},${naBorda} L${cx},${naBorda+dir*5} Z" fill="#fff" stroke="#94a3b8" stroke-width="0.6"/>`;
-  }
-  if(categoria === "premolar"){
-    return [T*0.32, T*0.68].map(cx=>`<circle cx="${cx}" cy="${naBorda+dir*1.5}" r="2.6" fill="#fff" stroke="#94a3b8" stroke-width="0.5"/>`).join("");
-  }
-  if(categoria === "molar"){
-    return [T*0.22, T*0.5, T*0.78].map(cx=>`<circle cx="${cx}" cy="${naBorda+dir*1.5}" r="2.8" fill="#fff" stroke="#94a3b8" stroke-width="0.5"/>`).join("");
-  }
-  return ""; // incisivo: borda lisa, sem cúspide
 }
 function _odontoToothSVG(numero, estadoDente, bloco, interactive){
   const T = 40, cell = T/3, LABEL_H = 12, ROOT_H = 15;
@@ -1634,8 +1642,8 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
   const implante = denteStatus === "implante";
 
   svg += `<g ${ausente?'opacity="0.32"':""}>`;
-  svg += implante ? _implanteSVG(T, raizY0, ROOT_H) : _raizSVG(categoria, bloco.arch, T, raizY0, ROOT_H);
-  svg += _cuspsSVG(categoria, bloco.arch, T, crownY0, T);
+  svg += _contornoDenteSVG(categoria, bloco.arch, T, crownY0, T, raizY0, ROOT_H);
+  if(implante) svg += _implanteSVG(T, raizY0, ROOT_H);
   svg += cellRect(topFace, cell, crownY0);
   svg += cellRect(leftFace, 0, cell+crownY0);
   svg += cellRect("oclusal", cell, cell+crownY0);
