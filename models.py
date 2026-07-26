@@ -428,6 +428,10 @@ class AnamneseRemota(Base):
     token: Mapped[str] = mapped_column(String(64), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="pendente")
     respostas: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON com os campos enviados pelo paciente
+    # Rubrica de quem preencheu (paciente, ou o próprio paciente na presença
+    # do profissional), colhida no momento do preenchimento — nunca
+    # sobrescrita depois, mesmo que a equipe edite campos na revisão.
+    assinaturaPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
     aprovadoPor: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     filledAt: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
