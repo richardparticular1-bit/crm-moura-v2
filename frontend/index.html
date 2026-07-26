@@ -3543,7 +3543,7 @@ async function abrirRevisaoAnamnese(id){
       <div style="display:flex;gap:14px;margin-bottom:6px">
         ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
           <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
-            <input type="radio" name="rq-${p.id}" value="${v}" ${resp===v?"checked":""} style="width:auto">${lab}
+            <input type="radio" name="rq-${p.id}" value="${v}" ${resp===v?"checked":""} autocomplete="off" style="width:auto">${lab}
           </label>`).join("")}
       </div>
       <input id="rqi-${p.id}" value="${esc(rc.info||"")}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
@@ -3590,8 +3590,12 @@ async function abrirRevisaoAnamnese(id){
       </div>
     </details>
     <label class="f"><span>Dentista que está revisando *</span><select id="ra-revisor">${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
+    ${!d.temAssinatura?`<p class="meta" style="color:var(--rose);margin-bottom:8px">⚠️ Assinatura pendente — o paciente ainda não assinou.</p>`:""}
     <div class="acts" style="justify-content:space-between">
-    <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.print} Imprimir</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.print} Imprimir</button>
+      ${d.temAssinatura?`<button class="btn ghost" onclick="verAssinaturaAnamnese('${id}')">✍️ Ver assinatura</button>`:`<button class="btn ghost" onclick="abrirColherAssinaturaAnamnese('${id}')">✍️ Colher assinatura</button>`}
+    </div>
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div></div>`);
   window._raPerguntas = d.perguntas || [];
@@ -3630,7 +3634,7 @@ function _papPerguntasHTML(modelo){
       <div style="display:flex;gap:14px;margin-bottom:6px">
         ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
           <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
-            <input type="radio" name="papq-${q.id}" value="${v}" style="width:auto">${lab}
+            <input type="radio" name="papq-${q.id}" value="${v}" autocomplete="off" style="width:auto">${lab}
           </label>`).join("")}
       </div>
       <input id="papqi-${q.id}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
@@ -3694,8 +3698,17 @@ async function abrirPreencherAnamnesePresencial(pid){
         </div>
       </div>
     </details>
+    <div style="margin-top:8px">
+      <div class="meta" style="margin-bottom:4px">Assinatura do paciente</div>
+      <p class="meta" style="margin-bottom:6px">Se o paciente não puder assinar agora, pode deixar em branco e colher depois.</p>
+      <div style="border:1px solid #cbd5e1;border-radius:8px;background:#fff">
+        <canvas id="sig-canvas" width="440" height="140" style="width:100%;height:140px;display:block;cursor:crosshair;touch-action:none"></canvas>
+      </div>
+      <button type="button" class="btn ghost sm" style="margin-top:4px" onclick="limparAssinaturaCanvas()">Limpar</button>
+    </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="salvarAnamnesePresencial('${p.id}')">Salvar</button></div>`);
+  initAssinaturaCanvas();
 }
 async function salvarAnamnesePresencial(pid){
   const g=i=>document.getElementById(i)?.value||"";
@@ -3708,6 +3721,7 @@ async function salvarAnamnesePresencial(pid){
     const sel = document.querySelector(`input[name="papq-${q.id}"]:checked`);
     if(sel) respostasClinicas[q.id] = { resposta: sel.value, info: g(`papqi-${q.id}`) };
   });
+  const assinaturaDataUrl = SIGPAD_HASDATA ? document.getElementById("sig-canvas").toDataURL("image/png") : "";
   const payload = {
     modeloId, profissionalId,
     birth: g("pap-birth")||null, email:g("pap-email"), rg:g("pap-rg"), orgaoExpedidor:g("pap-orgao"),
@@ -3715,7 +3729,7 @@ async function salvarAnamnesePresencial(pid){
     profissao:g("pap-ocupacao"), localTrabalho:g("pap-trab"), enderecoResidencial:g("pap-end"), indicadoPor:g("pap-indic"),
     respNome:g("pap-r-nome"), respRg:g("pap-r-rg"), respCpf:g("pap-r-cpf"), respTelefone:g("pap-r-tel"), respEmail:g("pap-r-email"),
     queixaPrincipal:g("pap-queixa"),
-    respostasClinicas,
+    respostasClinicas, assinaturaDataUrl,
   };
   let r;
   try{ r = await api("POST", `/patients/${pid}/anamnese-presencial`, payload); }
@@ -3744,10 +3758,41 @@ function vFichaAnamnesesSection(p){
           <div class="meta">${fmtDateTime(a.aprovadoEm||a.filledAt||a.created_at)}</div>
         </div>
         <span class="pill ${ANAM_STATUS_PILL[a.status]||"p-cancelado"}">${ANAM_STATUS_LABEL[a.status]||a.status}</span>
+        ${a.status!=="pendente" && !a.temAssinatura?`<span class="pill p-faltou">Assinatura pendente</span>`:""}
         ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`:""}
+        ${a.status!=="pendente" && !a.temAssinatura?`<button class="btn ghost sm" onclick="abrirColherAssinaturaAnamnese('${a.id}')">✍️ Colher assinatura</button>`:""}
         ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>`:""}
       </div>`).join("")}
   </div>`;
+}
+function abrirColherAssinaturaAnamnese(aid){
+  modal("Colher assinatura", `
+    <p class="meta" style="margin-bottom:8px">Peça pro paciente assinar abaixo.</p>
+    <div style="border:1px solid #cbd5e1;border-radius:8px;background:#fff">
+      <canvas id="sig-canvas" width="440" height="150" style="width:100%;height:150px;display:block;cursor:crosshair;touch-action:none"></canvas>
+    </div>
+    <div class="acts">
+      <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
+      <button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="_salvarAssinaturaAnamneseColetada('${aid}')">Salvar assinatura</button>
+    </div>`);
+  initAssinaturaCanvas();
+}
+async function _salvarAssinaturaAnamneseColetada(aid){
+  if(!SIGPAD_HASDATA){ toast("Desenhe a assinatura antes de salvar."); return; }
+  const dataUrl = document.getElementById("sig-canvas").toDataURL("image/png");
+  try{
+    await api("POST", `/anamnese-remota/${aid}/assinatura`, {dataUrl});
+    closeModal();
+    toast("Assinatura registrada. ✍️");
+    if(TAB==="ficha" && FICHA_ID){ FICHA_ANAMNESES = await api("GET", `/patients/${FICHA_ID}/anamneses`); render(); }
+  }catch(e){ /* toast já exibido pelo api() */ }
+}
+async function verAssinaturaAnamnese(aid){
+  try{
+    const r = await api("GET", `/anamnese-remota/${aid}/assinatura/url`);
+    window.open(r.url, "_blank");
+  }catch(e){ /* toast já exibido pelo api() */ }
 }
 async function imprimirAnamnesePreenchida(aid){
   // window.open precisa ser chamado JÁ, sem nenhum await antes — senão o
@@ -3756,6 +3801,10 @@ async function imprimirAnamnesePreenchida(aid){
   if(win) win.document.write("<p style='font-family:sans-serif;padding:40px;color:#666'>Gerando anamnese…</p>");
   let d;
   try{ d = await api("GET", `/anamnese-remota/${aid}`); }catch(e){ if(win) win.close(); return; }
+  let sigUrl = null;
+  if(d.temAssinatura){
+    try{ sigUrl = (await api("GET", `/anamnese-remota/${aid}/assinatura/url`)).url; }catch(e){ /* segue sem a imagem, mantém a linha em branco */ }
+  }
   const r = d.respostas || {};
   const respClin = r.respostasClinicas || {};
   const idade = r.birth ? Math.floor((new Date() - new Date(r.birth+"T00:00:00")) / 31557600000) : null;
@@ -3779,7 +3828,7 @@ async function imprimirAnamnesePreenchida(aid){
     <p style="font-size:13px;white-space:pre-wrap">${esc(r.queixaPrincipal)||"—"}</p>
     ${linhasQA?`<h2>Perguntas de saúde</h2><table><thead><tr><th>Pergunta</th><th style="text-align:center">Resposta</th><th>Informações adicionais</th></tr></thead><tbody>${linhasQA}</tbody></table>`:""}
     <div style="display:flex;justify-content:space-around;margin-top:50px;gap:20px">
-      <div class="doc-sig"><div class="line"></div>Assinatura do Paciente ou Responsável</div>
+      <div class="doc-sig">${sigUrl?`<img src="${sigUrl}" style="max-height:60px;display:block;margin:0 auto 4px">`:""}<div class="line"></div>Assinatura do Paciente ou Responsável${!sigUrl?`<div style="font-size:9.5px;color:#b91c1c;margin-top:2px">(pendente)</div>`:""}</div>
       <div class="doc-sig"><div class="line"></div>Assinatura do Profissional</div>
     </div>
   `;
@@ -4683,7 +4732,7 @@ async function renderAnamnesePublica(token){
         <div style="display:flex;gap:14px;margin-bottom:6px">
           ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
             <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
-              <input type="radio" name="apq-${p.id}" value="${v}" style="width:auto">${lab}
+              <input type="radio" name="apq-${p.id}" value="${v}" autocomplete="off" style="width:auto">${lab}
             </label>`).join("")}
         </div>
         <input id="apqi-${p.id}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
@@ -4728,9 +4777,22 @@ async function renderAnamnesePublica(token){
         </div>
       </div>
     </details>
+    <div class="card" style="margin-bottom:16px">
+      <h2>Assinatura</h2>
+      <p class="meta" style="margin-bottom:8px">Assine abaixo confirmando as respostas — com o dedo (touch) ou o mouse. Se não conseguir agora, pode deixar em branco e assinar depois na clínica.</p>
+      <div style="border:1px solid #cbd5e1;border-radius:8px;background:#fff">
+        <canvas id="sig-canvas" width="440" height="150" style="width:100%;height:150px;display:block;cursor:crosshair;touch-action:none"></canvas>
+      </div>
+      <button type="button" class="btn ghost sm" style="margin-top:6px" onclick="limparAssinaturaCanvas()">Limpar</button>
+    </div>
     <button id="ap-enviar-btn" style="width:100%;padding:13px;background:#0f766e;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">Enviar anamnese</button>
     <p style="text-align:center;font-size:11.5px;color:#94a3b8;margin-top:10px">Seus dados vão direto para a clínica e não são compartilhados com terceiros.</p>
   `;
+  // Alguns navegadores restauram seleções antigas de rádio ao recarregar a
+  // mesma página (mesmo sem <form>, mesmo com autocomplete="off" no input) —
+  // por segurança, força tudo desmarcado logo após montar o HTML.
+  root.querySelectorAll('input[type="radio"]').forEach(r => { r.checked = false; });
+  initAssinaturaCanvas();
   document.getElementById("ap-enviar-btn").addEventListener("click", async () => {
     const g = i => document.getElementById(i)?.value || "";
     const btn = document.getElementById("ap-enviar-btn");
@@ -4740,6 +4802,7 @@ async function renderAnamnesePublica(token){
       const sel = document.querySelector(`input[name="apq-${p.id}"]:checked`);
       if(sel) respostasClinicas[p.id] = { resposta: sel.value, info: g(`apqi-${p.id}`) };
     });
+    const assinaturaDataUrl = SIGPAD_HASDATA ? document.getElementById("sig-canvas").toDataURL("image/png") : "";
     try{
       const r = await fetch(API + "/anamnese-publica/" + encodeURIComponent(token), {
         method: "POST", headers: {"Content-Type":"application/json"},
@@ -4749,7 +4812,7 @@ async function renderAnamnesePublica(token){
           profissao:g("ap-prof"), localTrabalho:g("ap-trab"), enderecoResidencial:g("ap-end"), indicadoPor:g("ap-indic"),
           respNome:g("ap-r-nome"), respRg:g("ap-r-rg"), respCpf:g("ap-r-cpf"), respTelefone:g("ap-r-tel"), respEmail:g("ap-r-email"),
           queixaPrincipal:g("ap-queixa"),
-          respostasClinicas,
+          respostasClinicas, assinaturaDataUrl,
         }),
       });
       if(!r.ok) throw new Error("falhou");
