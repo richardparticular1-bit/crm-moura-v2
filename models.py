@@ -382,3 +382,28 @@ class ConsentimentoOrcamento(Base):
     assinaturaPacientePath: Mapped[str] = mapped_column(String(300))
     assinaturaProfissionalPath: Mapped[str] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnamneseRemota(Base):
+    """Link/QR para o PACIENTE preencher a própria anamnese remotamente,
+    antes ou fora de uma consulta presencial — inspirado no fluxo do
+    Codental. Registro imutável enquanto pendente/preenchido; ao ser
+    aprovado pela equipe, os dados vão para o cadastro do paciente
+    (Paciente) e a queixa principal se torna uma Evolucao normal, com
+    o profissional que revisou como autor. O token é opaco (256 bits),
+    igual ao tokenPortal — é a única credencial que abre o formulário
+    público, sem exigir login do paciente.
+    status: pendente (link criado, ainda não respondido) | preenchido
+    (paciente enviou, aguardando revisão) | aprovado (equipe confirmou
+    e os dados já foram aplicados ao cadastro)."""
+    __tablename__ = "anamneses_remotas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    token: Mapped[str] = mapped_column(String(64), unique=True)
+    status: Mapped[str] = mapped_column(String(20), default="pendente")
+    respostas: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON com os campos enviados pelo paciente
+    aprovadoPor: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    filledAt: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    aprovadoEm: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
