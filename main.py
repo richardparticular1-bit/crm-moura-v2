@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
 
@@ -986,19 +986,133 @@ def get_portal_paciente(token: str):
         }
 
 
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ANAMNESE REMOTA  (link/QR pro PACIENTE preencher sozinho, sem login;
 # equipe revisa e aprova depois — só então os dados entram no cadastro)
 # ══════════════════════════════════════════════════════════════════════════════
-# Campos que o paciente pode preencher no formulário público. Espelha o que
-# openPatientForm já coleta manualmente — mesmo vocabulário, pra não haver
-# dois formatos de "identificação do paciente" no sistema.
+# Campos fixos de identificação/responsável que o paciente pode preencher no
+# formulário público — espelham o que openPatientForm já coleta manualmente.
+# As perguntas CLÍNICAS variam por MODELO (Padrão, Infantil, Ortodôntica,
+# Cirurgia e Implante...) e vêm de AnamneseModelo/AnamnesePergunta — sempre no
+# formato Sim/Não/Não sei + "informações adicionais" (texto opcional), igual
+# ao padrão do Codental.
 ANAMNESE_CAMPOS_IDENTIFICACAO = [
     "birth", "rg", "orgaoExpedidor", "cpf", "naturalidade", "nacionalidade",
     "estadoCivil", "profissao", "localTrabalho", "enderecoResidencial", "indicadoPor", "email",
 ]
 ANAMNESE_CAMPOS_RESPONSAVEL = ["respNome", "respRg", "respCpf", "respTelefone", "respEmail"]
-ANAMNESE_CAMPOS_CLINICOS = ["alergias", "medicacoes", "condicoesSistemicas"]
+
+# Palavras-chave (no texto da própria pergunta) usadas só pra decidir em qual
+# campo de alerta clínico do cadastro (alergias / medicações / condições
+# sistêmicas) uma resposta "Sim" deve cair — só se aplica às perguntas dos
+# modelos padrão que a própria clínica pode editar depois; se o texto não
+# bater com nenhuma palavra-chave, a resposta continua preservada na
+# evolução gerada, só não some pro resumo rápido do cadastro.
+_KW_ALERGIA = ("alergia",)
+_KW_MEDICACAO = ("medicament", "medicação", "medicacao", "remédio", "remedio")
+_KW_CONDICAO = ("sanguín", "sanguin", "hemorrag", "cardiovascular", "diabét", "diabet",
+                "gestante", "gravidez", "hepatite", "renal", "respirat", "osteoporose",
+                "autoimune", "anticoagulante", "pressão", "pressao")
+
+# ── modelos padrão semeados na primeira vez que a clínica abre a tela ──
+_MODELOS_PADRAO_SEED: dict[str, list[str]] = {
+    "Anamnese Padrão": [
+        "Possui alguma alergia? (Como penicilinas, AAS ou outra)",
+        "Possui alguma alteração sanguínea?",
+        "Já teve hemorragia diagnosticada?",
+        "Possui alguma alteração cardiovascular? (pressão alta, sopro no coração, etc.)",
+        "É diabético?",
+        "Está gestante ou amamentando?",
+        "Possui alguma doença renal?",
+        "Possui hepatite ou outra doença no fígado?",
+        "Faz uso contínuo de alguma medicação?",
+        "Já foi hospitalizado(a) ou passou por cirurgia?",
+        "É fumante?",
+        "Possui alguma outra condição de saúde que devemos saber?",
+    ],
+    "Anamnese Infantil": [
+        "A criança possui alguma alergia? (medicamentos, alimentos, látex...)",
+        "Já teve alguma reação à anestesia local?",
+        "Possui alguma doença respiratória (asma, bronquite)?",
+        "Faz uso contínuo de alguma medicação?",
+        "Já foi hospitalizada ou passou por cirurgia?",
+        "Tem hábito de chupar dedo, chupeta ou roer unhas?",
+        "Respira normalmente pelo nariz ou é \"respiradora bucal\"?",
+        "Já teve traumatismo dental (queda, batida nos dentes)?",
+        "Possui alguma condição neurológica ou de desenvolvimento que devemos saber?",
+        "A gestação ou o parto tiveram alguma complicação relevante?",
+    ],
+    "Anamnese Ortodôntica": [
+        "Possui alguma alergia? (metais, látex, medicamentos)",
+        "Possui alguma alteração cardiovascular?",
+        "É diabético?",
+        "Possui alguma doença óssea ou articular (ATM, artrite)?",
+        "Já fez tratamento ortodôntico antes?",
+        "Range ou aperta os dentes (bruxismo)?",
+        "Tem hábito de respirar pela boca?",
+        "Já teve alguma cirurgia na face ou mandíbula?",
+        "Possui algum problema na articulação da mandíbula (estalos, dor, dificuldade de abrir a boca)?",
+        "Faz uso contínuo de alguma medicação?",
+        "Possui alguma outra condição de saúde que devemos saber?",
+    ],
+    "Anamnese de Cirurgia e Implante": [
+        "Possui alguma alergia? (anestésicos, antibióticos, látex...)",
+        "Possui alguma alteração sanguínea ou dificuldade de coagulação?",
+        "Já teve hemorragia diagnosticada?",
+        "Possui alguma alteração cardiovascular (pressão alta, marca-passo, sopro)?",
+        "É diabético?",
+        "Possui osteoporose ou já usou medicação à base de bisfosfonatos?",
+        "Está gestante ou amamentando?",
+        "Faz uso de anticoagulante ou antiagregante plaquetário?",
+        "É fumante?",
+        "Já fez alguma cirurgia odontológica antes? Teve alguma complicação?",
+        "Possui alguma doença autoimune?",
+        "Faz uso contínuo de alguma medicação?",
+        "Possui alguma outra condição de saúde que devemos saber?",
+    ],
+}
+
+
+def _seed_modelos_padrao(db, clinica_id: int) -> list[AnamneseModelo]:
+    criados = []
+    for nome, perguntas in _MODELOS_PADRAO_SEED.items():
+        m = AnamneseModelo(id=_new_id(), clinicaId=clinica_id, nome=nome, ativo=True)
+        db.add(m)
+        db.flush()
+        for i, texto in enumerate(perguntas):
+            db.add(AnamnesePergunta(id=_new_id(), clinicaId=clinica_id, modeloId=m.id, ordem=i, texto=texto))
+        criados.append(m)
+    db.commit()
+    return criados
+
+
+def _modelo_row(db, m: AnamneseModelo) -> dict[str, Any]:
+    perguntas = (
+        db.query(AnamnesePergunta)
+        .filter(AnamnesePergunta.modeloId == m.id)
+        .order_by(AnamnesePergunta.ordem.asc())
+        .all()
+    )
+    return {"id": m.id, "nome": m.nome, "perguntas": [{"id": p.id, "texto": p.texto} for p in perguntas]}
+
+
+@app.get("/api/anamnese-modelos")
+def list_anamnese_modelos(request: Request):
+    """Lista os modelos de anamnese da clínica — semeia os 4 padrão
+    (Padrão, Infantil, Ortodôntica, Cirurgia e Implante) na primeira vez."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        modelos = (
+            db.query(AnamneseModelo)
+            .filter(AnamneseModelo.clinicaId == quem.clinicaId, AnamneseModelo.ativo == True)  # noqa: E712
+            .order_by(AnamneseModelo.created_at.asc())
+            .all()
+        )
+        if not modelos:
+            modelos = _seed_modelos_padrao(db, quem.clinicaId)
+        return [_modelo_row(db, m) for m in modelos]
 
 
 class AnamneseRespostasIn(BaseModel):
@@ -1020,23 +1134,32 @@ class AnamneseRespostasIn(BaseModel):
     respCpf: str = ""
     respTelefone: str = ""
     respEmail: str = ""
-    alergias: str = ""
-    medicacoes: str = ""
-    condicoesSistemicas: str = ""
     queixaPrincipal: str = ""
+    # perguntaId -> {"resposta": "sim"|"nao"|"nao_sei", "info": "texto opcional"}
+    respostasClinicas: dict[str, dict] = {}
+
+
+class AnamneseRemotaCriarIn(BaseModel):
+    modeloId: str
 
 
 @app.post("/api/patients/{pid}/anamnese-remota", status_code=201)
-def criar_anamnese_remota(pid: str, request: Request):
+def criar_anamnese_remota(pid: str, data: AnamneseRemotaCriarIn, request: Request):
     """A equipe gera (ou reaproveita) o link pra este paciente preencher a
-    própria anamnese. Se já existir um link pendente/preenchido ainda não
-    aprovado, devolve o mesmo em vez de criar outro — evita links órfãos
-    quando a pessoa clica "gerar link" duas vezes por engano."""
+    própria anamnese, escolhendo o modelo (Padrão, Infantil...). Se já
+    existir um link pendente/preenchido ainda não aprovado, devolve o mesmo
+    em vez de criar outro — evita links órfãos quando a pessoa clica
+    "gerar link" duas vezes por engano. Se o link ainda estiver "pendente"
+    (o paciente não respondeu ainda), o modelo escolhido agora substitui o
+    anterior; se já foi "preenchido", o modelo original é preservado."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         pac = db.get(Paciente, pid)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado.")
+        modelo = db.get(AnamneseModelo, data.modeloId)
+        if not modelo or modelo.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Modelo de anamnese não encontrado.")
         existente = (
             db.query(AnamneseRemota)
             .filter(AnamneseRemota.patientId == pid, AnamneseRemota.clinicaId == quem.clinicaId,
@@ -1046,8 +1169,11 @@ def criar_anamnese_remota(pid: str, request: Request):
         )
         if existente:
             a = existente
+            if a.status == "pendente":
+                a.modeloId = data.modeloId
+                db.commit()
         else:
-            a = AnamneseRemota(id=_new_id(), clinicaId=quem.clinicaId, patientId=pid,
+            a = AnamneseRemota(id=_new_id(), clinicaId=quem.clinicaId, patientId=pid, modeloId=data.modeloId,
                                 token=secrets.token_urlsafe(24), status="pendente")
             db.add(a)
             db.commit()
@@ -1081,10 +1207,20 @@ def get_anamnese_publica(token: str):
             raise HTTPException(404, "Link inválido.")
         pac = db.get(Paciente, a.patientId)
         clinica = db.get(Clinica, a.clinicaId) if pac else None
+        modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
+        perguntas = []
+        if modelo:
+            perguntas = [
+                {"id": p.id, "texto": p.texto}
+                for p in db.query(AnamnesePergunta).filter(AnamnesePergunta.modeloId == modelo.id)
+                .order_by(AnamnesePergunta.ordem.asc()).all()
+            ]
         return {
             "status": a.status,
             "patientName": pac.name if pac else "",
             "clinicaNome": clinica.nome if clinica else "",
+            "modeloNome": modelo.nome if modelo else "",
+            "perguntas": perguntas,
         }
 
 
@@ -1132,18 +1268,28 @@ def list_anamneses_pendentes(request: Request):
 @app.get("/api/anamnese-remota/{aid}")
 def get_anamnese_detalhe(aid: str, request: Request):
     """Detalhe completo pra tela de revisão — respostas do paciente já
-    decodificadas, prontas pra virar campos editáveis no formulário."""
+    decodificadas, com o texto de cada pergunta do modelo usado."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(AnamneseRemota, aid)
         if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Anamnese não encontrada.")
         pac = db.get(Paciente, a.patientId)
+        modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
+        perguntas = []
+        if modelo:
+            perguntas = [
+                {"id": p.id, "texto": p.texto}
+                for p in db.query(AnamnesePergunta).filter(AnamnesePergunta.modeloId == modelo.id)
+                .order_by(AnamnesePergunta.ordem.asc()).all()
+            ]
         respostas = json.loads(a.respostas) if a.respostas else {}
         return {
             "id": a.id, "patientId": a.patientId,
             "patientName": pac.name if pac else "Paciente removido",
             "status": a.status, "respostas": respostas,
+            "modeloNome": modelo.nome if modelo else "",
+            "perguntas": perguntas,
             "filledAt": a.filledAt.isoformat() if a.filledAt else None,
         }
 
@@ -1168,18 +1314,44 @@ class AprovarAnamneseIn(BaseModel):
     respCpf: str = ""
     respTelefone: str = ""
     respEmail: str = ""
-    alergias: str = ""
-    medicacoes: str = ""
-    condicoesSistemicas: str = ""
     queixaPrincipal: str = ""
+    respostasClinicas: dict[str, dict] = {}
+
+
+def _resumo_respostas_clinicas(perguntas: list[dict], respostas_clinicas: dict) -> tuple[str, str, str, list[str]]:
+    """A partir das perguntas do modelo e das respostas (possivelmente
+    editadas pela equipe), devolve: (alergias, medicacoes, condicoesSistemicas,
+    linhas_para_evolucao). Os três primeiros só levam o que bateu com as
+    palavras-chave — o restante das respostas "Sim"/"Não sei" continua
+    preservado na lista de linhas, que vai inteira pra evolução."""
+    rotulo = {"sim": "Sim", "nao": "Não", "nao_sei": "Não sei"}
+    alergias_bits, medic_bits, cond_bits, linhas = [], [], [], []
+    for p in perguntas:
+        r = respostas_clinicas.get(p["id"]) or {}
+        resposta = (r.get("resposta") or "").strip()
+        info = (r.get("info") or "").strip()
+        if not resposta:
+            continue
+        linhas.append(f"{p['texto']}: {rotulo.get(resposta, resposta)}" + (f" — {info}" if info else ""))
+        if resposta != "sim":
+            continue
+        texto_low = p["texto"].lower()
+        if any(k in texto_low for k in _KW_ALERGIA):
+            alergias_bits.append(info or p["texto"])
+        elif any(k in texto_low for k in _KW_MEDICACAO):
+            medic_bits.append(info or p["texto"])
+        elif any(k in texto_low for k in _KW_CONDICAO):
+            cond_bits.append(info or p["texto"])
+    return ("; ".join(alergias_bits), "; ".join(medic_bits), "; ".join(cond_bits), linhas)
 
 
 @app.post("/api/anamnese-remota/{aid}/aprovar", status_code=201)
 def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
-    """Confirma a anamnese: aplica os campos de identificação e alertas
-    clínicos ao cadastro do paciente, e registra a queixa principal como
-    uma evolução normal (mesma regra de autoria de qualquer evolução —
-    exige o profissional que revisou)."""
+    """Confirma a anamnese: aplica os campos de identificação ao cadastro do
+    paciente, resume as respostas clínicas em alergias/medicações/condições
+    sistêmicas (por palavra-chave) e registra a queixa principal + o
+    Q&A completo como uma evolução normal — mesma regra de autoria de
+    qualquer evolução, exige o profissional que revisou."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(AnamneseRemota, aid)
@@ -1192,15 +1364,36 @@ def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
         pac = db.get(Paciente, a.patientId)
         if not pac:
             raise HTTPException(404, "Paciente não encontrado.")
-        for campo in ANAMNESE_CAMPOS_IDENTIFICACAO + ANAMNESE_CAMPOS_RESPONSAVEL + ANAMNESE_CAMPOS_CLINICOS:
+        for campo in ANAMNESE_CAMPOS_IDENTIFICACAO + ANAMNESE_CAMPOS_RESPONSAVEL:
             valor = getattr(data, campo)
             if valor:  # só sobrescreve o que veio preenchido — não apaga dado já existente com vazio
                 setattr(pac, campo, valor)
+
+        modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
+        perguntas = []
+        if modelo:
+            perguntas = [
+                {"id": p.id, "texto": p.texto}
+                for p in db.query(AnamnesePergunta).filter(AnamnesePergunta.modeloId == modelo.id)
+                .order_by(AnamnesePergunta.ordem.asc()).all()
+            ]
+        alergias_novas, medic_novas, cond_novas, linhas = _resumo_respostas_clinicas(perguntas, data.respostasClinicas)
+        if alergias_novas:
+            pac.alergias = (pac.alergias + "; " + alergias_novas) if pac.alergias else alergias_novas
+        if medic_novas:
+            pac.medicacoes = (pac.medicacoes + "; " + medic_novas) if pac.medicacoes else medic_novas
+        if cond_novas:
+            pac.condicoesSistemicas = (pac.condicoesSistemicas + "; " + cond_novas) if pac.condicoesSistemicas else cond_novas
+
         queixa = data.queixaPrincipal.strip() or "[Anamnese remota] Sem queixa principal relatada."
+        conteudo_evolucao = queixa
+        if linhas:
+            titulo_modelo = f" ({modelo.nome})" if modelo else ""
+            conteudo_evolucao += f"\n\n--- Respostas da anamnese{titulo_modelo} ---\n" + "\n".join(linhas)
         db.add(Evolucao(
             id=_new_id(), clinicaId=quem.clinicaId, patientId=a.patientId, profissionalId=data.profissionalId,
             denteRegiao="", procedimento="Anamnese inicial (preenchida remotamente pelo paciente)",
-            conteudo=queixa,
+            conteudo=conteudo_evolucao,
         ))
         a.status = "aprovado"
         a.aprovadoPor = data.profissionalId
@@ -1208,7 +1401,6 @@ def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
         a.respostas = json.dumps(data.model_dump(exclude={"profissionalId"}), ensure_ascii=False)
         db.commit()
         return {"ok": True}
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSULTAS  (com profissional, prontuário, orçamento, duração)
