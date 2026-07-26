@@ -230,6 +230,7 @@ let FIN_MES = todayISO().slice(0,7); // YYYY-MM do painel financeiro
 let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
+let FICHA_ANAMNESES = [];     // histórico de anamneses (remotas e presenciais) do paciente da ficha
 const ANEXO_THUMB_CACHE = {}; // id do anexo -> URL assinada já carregada (evita refazer a assinatura a cada render)
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let REL_MES = todayISO().slice(0,7);  // mês do relatório por dentista
@@ -2170,17 +2171,19 @@ async function openFicha(pid){
   FICHA_ID = pid;
   FICHA_EVOLUCOES = [];
   FICHA_ANEXOS = [];
+  FICHA_ANAMNESES = [];
   FICHA_ODONTO = { estado:{}, historico:[], datasDisponiveis:[] };
   ODONTO_DATA_VIEW = null;
   FICHA_CONSENTIMENTOS = { estado:{}, historico:[], tipos:{} };
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
-  const [ev, ax, ret] = await Promise.all([
+  const [ev, ax, ret, anam] = await Promise.all([
     api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`),
     api("GET", `/anexos?patient_id=${encodeURIComponent(pid)}`),
     api("GET", `/retorno/${encodeURIComponent(pid)}`),
+    api("GET", `/patients/${encodeURIComponent(pid)}/anamneses`),
   ]);
-  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses;
+  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses; FICHA_ANAMNESES = anam;
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   carregarFotoFicha(pid);
   carregarOdontograma(pid);
@@ -2633,6 +2636,7 @@ function vFicha(){
     <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
     <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
     <button class="btn ghost sm" onclick="abrirCompartilharAnamnese('${p.id}','${esc(p.name)}','${esc(p.phone)}')">📤 Anamnese remota</button>
+    <button class="btn ghost sm" onclick="abrirPreencherAnamnesePresencial('${p.id}')">🖊️ Preencher anamnese</button>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
   </div>
 
@@ -2759,6 +2763,8 @@ function vFicha(){
     </div>
     <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${p.id}','${esc(p.name)}')">✍️ Coletar assinatura</button>
   </div>
+
+  ${vFichaAnamnesesSection(p)}
 
   ${vConsentimentoSection(p)}
 
@@ -3519,7 +3525,8 @@ function vAnamneseRemota(){
   return header("Anamneses recebidas","Preenchidas pelo paciente, aguardando revisão antes de entrar no cadastro.")+
   (list.length===0?empty("Nenhuma anamnese aguardando revisão."):
   list.map(a=>queueCard(a.patientName, "Enviada em "+fmtDateTime(a.filledAt), null,
-    `<button class="btn sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`)).join(""));
+    `<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>
+     <button class="btn sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`)).join(""));
 }
 async function abrirRevisaoAnamnese(id){
   let d;
@@ -3583,8 +3590,10 @@ async function abrirRevisaoAnamnese(id){
       </div>
     </details>
     <label class="f"><span>Dentista que está revisando *</span><select id="ra-revisor">${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
-    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div>`);
+    <div class="acts" style="justify-content:space-between">
+    <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.print} Imprimir</button>
+    <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div></div>`);
   window._raPerguntas = d.perguntas || [];
 }
 async function aprovarAnamneseRemota(id){
@@ -3609,6 +3618,172 @@ async function aprovarAnamneseRemota(id){
     await api("POST", `/anamnese-remota/${id}/aprovar`, payload);
     closeModal(); await reloadAll(); toast("Anamnese confirmada e aplicada ao cadastro. ✅");
   }catch(e){ /* toast já exibido pelo api() */ }
+}
+
+/* ── preenchimento presencial: o PROFISSIONAL preenche direto no sistema,
+   sem link — aplica ao cadastro na hora, sem etapa de revisão separada ── */
+function _papPerguntasHTML(modelo){
+  if(!modelo || !modelo.perguntas || !modelo.perguntas.length) return "";
+  return modelo.perguntas.map(q=>`
+    <div style="padding:9px 0;border-bottom:1px solid #f1f5f9">
+      <div style="font-size:13.5px;margin-bottom:6px">${esc(q.texto)}</div>
+      <div style="display:flex;gap:14px;margin-bottom:6px">
+        ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+            <input type="radio" name="papq-${q.id}" value="${v}" style="width:auto">${lab}
+          </label>`).join("")}
+      </div>
+      <input id="papqi-${q.id}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
+    </div>`).join("");
+}
+function _papOnModeloChange(){
+  const modeloId = document.getElementById("pap-modelo")?.value;
+  const modelo = (window._papModelos||[]).find(m=>m.id===modeloId);
+  const wrap = document.getElementById("pap-perguntas-wrap");
+  if(wrap) wrap.innerHTML = _papPerguntasHTML(modelo);
+}
+async function abrirPreencherAnamnesePresencial(pid){
+  const p = pById(pid); if(!p) return;
+  let modelos;
+  try{ modelos = await api("GET", "/anamnese-modelos"); }catch(e){ return; }
+  if(!modelos || modelos.length===0){ toast("Nenhum modelo de anamnese disponível."); return; }
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional antes de preencher."); return; }
+  window._papModelos = modelos;
+  const modeloIni = modelos[0];
+  modal(`Preencher anamnese — ${esc(p.name)}`, `
+    <label class="f"><span>Modelo</span>
+      <select id="pap-modelo" onchange="_papOnModeloChange()">${modelos.map(m=>`<option value="${m.id}">${esc(m.nome)}</option>`).join("")}</select>
+    </label>
+    <label class="f"><span>Dentista responsável *</span><select id="pap-dentista">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Queixa principal</span><textarea id="pap-queixa" rows="3"></textarea></label>
+    <div id="pap-perguntas-wrap">${_papPerguntasHTML(modeloIni)}</div>
+    <div class="grid g2">
+      <label class="f"><span>Nascimento</span><input type="date" id="pap-birth" value="${p.birth||""}"></label>
+      <label class="f"><span>E-mail</span><input id="pap-email" value="${esc(p.email||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>RG</span><input id="pap-rg" value="${esc(p.rg||"")}"></label>
+      <label class="f"><span>Órgão expedidor</span><input id="pap-orgao" value="${esc(p.orgaoExpedidor||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>CPF</span><input id="pap-cpf" value="${esc(p.cpf||"")}"></label>
+      <label class="f"><span>Estado civil</span><input id="pap-civil" value="${esc(p.estadoCivil||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Naturalidade</span><input id="pap-natur" value="${esc(p.naturalidade||"")}"></label>
+      <label class="f"><span>Nacionalidade</span><input id="pap-nac" value="${esc(p.nacionalidade||"Brasileira")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Profissão</span><input id="pap-ocupacao" value="${esc(p.profissao||"")}"></label>
+      <label class="f"><span>Local de trabalho</span><input id="pap-trab" value="${esc(p.localTrabalho||"")}"></label>
+    </div>
+    <label class="f"><span>Endereço residencial</span><input id="pap-end" value="${esc(p.enderecoResidencial||"")}"></label>
+    <label class="f"><span>Indicado por</span><input id="pap-indic" value="${esc(p.indicadoPor||"")}"></label>
+    <details ${p.respNome?"open":""} style="margin-bottom:11px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#475569;padding:6px 0">👨‍👩‍👧 Responsável legal</summary>
+      <div style="padding-top:8px">
+        <label class="f"><span>Nome</span><input id="pap-r-nome" value="${esc(p.respNome||"")}"></label>
+        <div class="grid g2">
+          <label class="f"><span>RG</span><input id="pap-r-rg" value="${esc(p.respRg||"")}"></label>
+          <label class="f"><span>CPF</span><input id="pap-r-cpf" value="${esc(p.respCpf||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Telefone</span><input id="pap-r-tel" value="${esc(p.respTelefone||"")}"></label>
+          <label class="f"><span>E-mail</span><input id="pap-r-email" value="${esc(p.respEmail||"")}"></label>
+        </div>
+      </div>
+    </details>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarAnamnesePresencial('${p.id}')">Salvar</button></div>`);
+}
+async function salvarAnamnesePresencial(pid){
+  const g=i=>document.getElementById(i)?.value||"";
+  const modeloId = g("pap-modelo");
+  const profissionalId = parseInt(g("pap-dentista"));
+  if(!profissionalId){ toast("Selecione o dentista responsável."); return; }
+  const modelo = (window._papModelos||[]).find(m=>m.id===modeloId);
+  const respostasClinicas = {};
+  (modelo?.perguntas||[]).forEach(q=>{
+    const sel = document.querySelector(`input[name="papq-${q.id}"]:checked`);
+    if(sel) respostasClinicas[q.id] = { resposta: sel.value, info: g(`papqi-${q.id}`) };
+  });
+  const payload = {
+    modeloId, profissionalId,
+    birth: g("pap-birth")||null, email:g("pap-email"), rg:g("pap-rg"), orgaoExpedidor:g("pap-orgao"),
+    cpf:g("pap-cpf"), estadoCivil:g("pap-civil"), naturalidade:g("pap-natur"), nacionalidade:g("pap-nac"),
+    profissao:g("pap-ocupacao"), localTrabalho:g("pap-trab"), enderecoResidencial:g("pap-end"), indicadoPor:g("pap-indic"),
+    respNome:g("pap-r-nome"), respRg:g("pap-r-rg"), respCpf:g("pap-r-cpf"), respTelefone:g("pap-r-tel"), respEmail:g("pap-r-email"),
+    queixaPrincipal:g("pap-queixa"),
+    respostasClinicas,
+  };
+  let r;
+  try{ r = await api("POST", `/patients/${pid}/anamnese-presencial`, payload); }
+  catch(e){ return; }
+  closeModal(); await reloadAll();
+  if(TAB==="ficha" && FICHA_ID===pid){ FICHA_ANAMNESES = await api("GET", `/patients/${pid}/anamneses`); render(); }
+  const p = pById(pid);
+  modal("Anamnese registrada", `
+    <p style="font-size:14px;margin-bottom:16px">Anamnese salva e aplicada ao prontuário de ${esc(p?p.name:"")}. ✅</p>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
+    <button class="btn" onclick="closeModal();imprimirAnamnesePreenchida('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+}
+
+/* ── histórico de anamneses na Ficha + impressão (remota ou presencial) ── */
+const ANAM_STATUS_LABEL = { pendente:"Link pendente (paciente ainda não respondeu)", preenchido:"Aguardando revisão", aprovado:"Aprovada" };
+const ANAM_STATUS_PILL = { pendente:"p-cancelado", preenchido:"p-agendado", aprovado:"p-concluido" };
+function vFichaAnamnesesSection(p){
+  const list = FICHA_ANAMNESES || [];
+  if(list.length===0) return "";
+  return `<div class="card" style="margin-bottom:12px">
+    <h2>Anamneses (${list.length})</h2>
+    ${list.map(a=>`
+      <div class="row">
+        <div class="grow">
+          <div style="font-weight:500;font-size:14px">${esc(a.modeloNome||"Anamnese")}</div>
+          <div class="meta">${fmtDateTime(a.aprovadoEm||a.filledAt||a.created_at)}</div>
+        </div>
+        <span class="pill ${ANAM_STATUS_PILL[a.status]||"p-cancelado"}">${ANAM_STATUS_LABEL[a.status]||a.status}</span>
+        ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`:""}
+        ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>`:""}
+      </div>`).join("")}
+  </div>`;
+}
+async function imprimirAnamnesePreenchida(aid){
+  // window.open precisa ser chamado JÁ, sem nenhum await antes — senão o
+  // navegador não reconhece mais como gesto do usuário e bloqueia o pop-up.
+  const win = window.open("", "_blank");
+  if(win) win.document.write("<p style='font-family:sans-serif;padding:40px;color:#666'>Gerando anamnese…</p>");
+  let d;
+  try{ d = await api("GET", `/anamnese-remota/${aid}`); }catch(e){ if(win) win.close(); return; }
+  const r = d.respostas || {};
+  const respClin = r.respostasClinicas || {};
+  const idade = r.birth ? Math.floor((new Date() - new Date(r.birth+"T00:00:00")) / 31557600000) : null;
+  const linhasQA = (d.perguntas||[]).map(q=>{
+    const rc = respClin[q.id] || {};
+    const marca = v => rc.resposta===v ? "☑" : "☐";
+    return `<tr><td>${esc(q.texto)}</td><td style="text-align:center;white-space:nowrap">${marca("sim")} Sim &nbsp; ${marca("nao")} Não &nbsp; ${marca("nao_sei")} Não sei</td><td>${esc(rc.info||"")}</td></tr>`;
+  }).join("");
+  const corpo = `
+    <h1>Anamnese${d.modeloNome?` — ${esc(d.modeloNome)}`:""}</h1>
+    <p style="font-size:13px;margin:0 0 12px"><b>Paciente:</b> ${esc(d.patientName)}${idade!==null?` &nbsp;·&nbsp; ${idade} anos`:""}</p>
+    <table>
+      <tbody>
+        <tr><td style="width:33%"><b>Nascimento</b><br>${r.birth?fmtDate(r.birth):"—"}</td><td style="width:33%"><b>CPF</b><br>${esc(r.cpf)||"—"}</td><td><b>RG</b><br>${esc(r.rg)||"—"} ${esc(r.orgaoExpedidor)||""}</td></tr>
+        <tr><td><b>Naturalidade</b><br>${esc(r.naturalidade)||"—"}</td><td><b>Nacionalidade</b><br>${esc(r.nacionalidade)||"—"}</td><td><b>Estado civil</b><br>${esc(r.estadoCivil)||"—"}</td></tr>
+        <tr><td><b>Profissão</b><br>${esc(r.profissao)||"—"}</td><td colspan="2"><b>Endereço</b><br>${esc(r.enderecoResidencial)||"—"}</td></tr>
+      </tbody>
+    </table>
+    ${r.respNome?`<p style="font-size:12px"><b>Responsável:</b> ${esc(r.respNome)}${r.respCpf?" · CPF "+esc(r.respCpf):""}${r.respTelefone?" · "+esc(r.respTelefone):""}</p>`:""}
+    <h2>Queixa principal</h2>
+    <p style="font-size:13px;white-space:pre-wrap">${esc(r.queixaPrincipal)||"—"}</p>
+    ${linhasQA?`<h2>Perguntas de saúde</h2><table><thead><tr><th>Pergunta</th><th style="text-align:center">Resposta</th><th>Informações adicionais</th></tr></thead><tbody>${linhasQA}</tbody></table>`:""}
+    <div style="display:flex;justify-content:space-around;margin-top:50px;gap:20px">
+      <div class="doc-sig"><div class="line"></div>Assinatura do Paciente ou Responsável</div>
+      <div class="doc-sig"><div class="line"></div>Assinatura do Profissional</div>
+    </div>
+  `;
+  _abrirDocImpressao(win, `Anamnese - ${d.patientName}`, corpo);
 }
 
 /* ════════════════════════════════════════════
