@@ -1137,6 +1137,7 @@ class AnamneseRespostasIn(BaseModel):
     queixaPrincipal: str = ""
     # perguntaId -> {"resposta": "sim"|"nao"|"nao_sei", "info": "texto opcional"}
     respostasClinicas: dict[str, dict] = {}
+    assinaturaDataUrl: str = ""  # rubrica do paciente, PNG em base64 — obrigatória
 
 
 class AnamneseRemotaCriarIn(BaseModel):
@@ -1226,15 +1227,22 @@ def get_anamnese_publica(token: str):
 
 @app.post("/api/anamnese-publica/{token}", status_code=201)
 def enviar_anamnese_publica(token: str, data: AnamneseRespostasIn):
-    """O PACIENTE envia as respostas. Fica pendente de revisão — nada é
-    aplicado ao cadastro ainda."""
+    """O PACIENTE envia as respostas. A assinatura é opcional aqui — se não
+    vier, a anamnese fica com "assinatura pendente" e a equipe pode colher
+    depois (presencialmente ou reenviando o pedido)."""
     with SessionLocal() as db:
         a = db.query(AnamneseRemota).filter(AnamneseRemota.token == token).first()
         if not a:
             raise HTTPException(404, "Link inválido.")
         if a.status == "aprovado":
             raise HTTPException(410, "Esta anamnese já foi revisada pela clínica.")
-        a.respostas = json.dumps(data.model_dump(), ensure_ascii=False)
+        if data.assinaturaDataUrl:
+            _sb_configurado()
+            raw = _decodificar_assinatura(data.assinaturaDataUrl)
+            path = f"_assinaturas_anamnese/{a.clinicaId}/{a.id}.png"
+            _sb_upload(path, raw, "image/png")
+            a.assinaturaPath = path
+        a.respostas = json.dumps(data.model_dump(exclude={"assinaturaDataUrl"}), ensure_ascii=False)
         a.status = "preenchido"
         a.filledAt = datetime.now()
         db.commit()
@@ -1290,6 +1298,7 @@ def get_anamnese_detalhe(aid: str, request: Request):
             "status": a.status, "respostas": respostas,
             "modeloNome": modelo.nome if modelo else "",
             "perguntas": perguntas,
+            "temAssinatura": bool(a.assinaturaPath),
             "filledAt": a.filledAt.isoformat() if a.filledAt else None,
         }
 
@@ -1391,7 +1400,7 @@ def _aplicar_anamnese_ao_cadastro(db, a: AnamneseRemota, quem: Usuario, data: "A
     a.status = "aprovado"
     a.aprovadoPor = data.profissionalId
     a.aprovadoEm = datetime.now()
-    a.respostas = json.dumps(data.model_dump(exclude={"profissionalId"}), ensure_ascii=False)
+    a.respostas = json.dumps(data.model_dump(exclude={"profissionalId", "modeloId", "assinaturaDataUrl"}), ensure_ascii=False)
 
 
 @app.post("/api/anamnese-remota/{aid}/aprovar", status_code=201)
@@ -1399,7 +1408,9 @@ def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
     """Confirma a anamnese enviada pelo paciente: aplica os campos de
     identificação ao cadastro, resume as respostas clínicas em alergias/
     medicações/condições sistêmicas e registra a queixa principal + o Q&A
-    completo como evolução — exige o profissional que revisou."""
+    completo como evolução — exige o profissional que revisou. A assinatura
+    do paciente, colhida no envio, é preservada como está — não é refeita
+    aqui mesmo que a equipe edite algum campo na revisão."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(AnamneseRemota, aid)
@@ -1414,13 +1425,15 @@ def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
 
 class AnamnesePresencialIn(AprovarAnamneseIn):
     modeloId: str
+    assinaturaDataUrl: str = ""  # rubrica do paciente, PNG em base64 — obrigatória
 
 
 @app.post("/api/patients/{pid}/anamnese-presencial", status_code=201)
 def preencher_anamnese_presencial(pid: str, data: AnamnesePresencialIn, request: Request):
     """O PROFISSIONAL preenche a anamnese direto no sistema (presencial),
     sem passar pelo link remoto — aplica ao cadastro na hora, sem etapa de
-    revisão separada, já que quem preencheu é quem está confirmando."""
+    revisão separada. A assinatura do paciente é opcional aqui também: se
+    não for colhida agora, fica "pendente" e pode ser colhida depois."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         pac = db.get(Paciente, pid)
@@ -1433,9 +1446,48 @@ def preencher_anamnese_presencial(pid: str, data: AnamnesePresencialIn, request:
                             token=secrets.token_urlsafe(24), status="preenchido", filledAt=datetime.now())
         db.add(a)
         db.flush()
+        if data.assinaturaDataUrl:
+            _sb_configurado()
+            raw = _decodificar_assinatura(data.assinaturaDataUrl)
+            path = f"_assinaturas_anamnese/{quem.clinicaId}/{a.id}.png"
+            _sb_upload(path, raw, "image/png")
+            a.assinaturaPath = path
         _aplicar_anamnese_ao_cadastro(db, a, quem, data, origem="presencial")
         db.commit()
         return {"ok": True, "id": a.id}
+
+
+@app.post("/api/anamnese-remota/{aid}/assinatura", status_code=201)
+def colher_assinatura_anamnese(aid: str, data: AssinaturaIn, request: Request):
+    """Colhe (ou substitui) a assinatura de uma anamnese depois do
+    preenchimento — usada quando ficou "assinatura pendente" e o paciente
+    volta pra assinar, presencialmente ou reabrindo o link."""
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anamnese não encontrada.")
+        raw = _decodificar_assinatura(data.dataUrl)
+        path = f"_assinaturas_anamnese/{quem.clinicaId}/{a.id}.png"
+        _sb_upload(path, raw, "image/png")
+        a.assinaturaPath = path
+        db.commit()
+        return {"ok": True}
+
+
+@app.get("/api/anamnese-remota/{aid}/assinatura/url")
+def get_assinatura_anamnese(aid: str, request: Request):
+    quem = _usuario_logado(request)
+    _sb_configurado()
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId or not a.assinaturaPath:
+            raise HTTPException(404, "Sem assinatura registrada.")
+    url = _sb_signed_url_or_none(a.assinaturaPath, segundos=600)
+    if not url:
+        raise HTTPException(404, "Sem assinatura registrada.")
+    return {"url": url}
 
 
 @app.get("/api/patients/{pid}/anamneses")
@@ -1458,6 +1510,7 @@ def list_anamneses_paciente(pid: str, request: Request):
             modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
             result.append({
                 "id": a.id, "status": a.status, "modeloNome": modelo.nome if modelo else "",
+                "temAssinatura": bool(a.assinaturaPath),
                 "created_at": a.created_at.isoformat() if a.created_at else None,
                 "filledAt": a.filledAt.isoformat() if a.filledAt else None,
                 "aprovadoEm": a.aprovadoEm.isoformat() if a.aprovadoEm else None,
