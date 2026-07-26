@@ -215,10 +215,11 @@ const IC = {
   camera:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
   print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  clip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>',
 };
 
 /* ── estado global ── */
-let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[], retornos:[], despesas:[] };
+let DB = { patients:[], appointments:[], surveys:[], settings:{}, profissionais:[], tarefas:[], chat:[], aniversariantes:[], lancamentos:[], orcamentos:[], retornos:[], despesas:[], anamneseRemota:[] };
 let TAB = "dash";
 let AGENDA_DAY = todayISO();
 let AGENDA_VIEW = "dia"; // dia | semana | mes | ano
@@ -256,6 +257,9 @@ if(QR_PACIENTE_ALVO){ history.replaceState(null, "", window.location.pathname); 
 
 /* ── portal público do paciente — ?portal=<token> não passa pela área da equipe nem exige login ── */
 const PORTAL_TOKEN = new URLSearchParams(window.location.search).get("portal") || null;
+
+/* ── link público de anamnese remota — ?anamnese=<token>, mesma lógica do portal: sem login, página isolada ── */
+const ANAMNESE_TOKEN = new URLSearchParams(window.location.search).get("anamnese") || null;
 
 /* ── API helpers ── */
 /* Evita cliques duplos criando registros repetidos: chamadas de escrita
@@ -352,7 +356,7 @@ function aplicarMarcaSidebar(){
   }
 }
 async function reloadAll() {
-  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas] = await Promise.all([
+  const [patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas, anamneseRemota] = await Promise.all([
     api("GET", "/patients"),
     api("GET", "/appointments"),
     api("GET", "/surveys"),
@@ -364,8 +368,9 @@ async function reloadAll() {
     api("GET", "/orcamentos"),
     api("GET", "/retornos"),
     api("GET", "/despesas"),
+    api("GET", "/anamnese-remota"),
   ]);
-  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas, chat: DB.chat||[] };
+  DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas, anamneseRemota, chat: DB.chat||[] };
   render();
 }
 
@@ -484,8 +489,9 @@ function calc(){
   const finVencidos = (DB.lancamentos||[]).filter(l=>!l.pagoEm && l.vencimento < t).length;
   const orcApresentados = (DB.orcamentos||[]).filter(o=>o.status==="apresentado").length;
   const retornosDue = (DB.retornos||[]).length;
+  const anamnesePendentes = (DB.anamneseRemota||[]).length;
   return { t, pendingConfirm, inactive, pendingSurvey, pendingReview, nps,
-    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos, orcamentos:orcApresentados, retornos:retornosDue } };
+    badges:{ confirm:pendingConfirm.length, reactivate:inactive.length, survey:pendingSurvey.length, review:pendingReview.length, tarefas:tarefasPendentes, aniversarios, financeiro:finVencidos, orcamentos:orcApresentados, retornos:retornosDue, anamnese:anamnesePendentes } };
 }
 
 /* ── navegação ── */
@@ -499,6 +505,7 @@ const NAV = [
   {id:"confirm",label:"Confirmações",ic:IC.check,badge:"confirm"},
   {id:"reactivate",label:"Reativação",ic:IC.refresh,badge:"reactivate"},
   {id:"retornos",label:"Retornos",ic:IC.bell,badge:"retornos"},
+  {id:"anamnese",label:"Anamneses",ic:IC.clip,badge:"anamnese"},
   {id:"relatorios",label:"Relatórios",ic:IC.chart},
   {id:"survey",label:"Satisfação",ic:IC.smile,badge:"survey"},
   {id:"review",label:"Aval. Google",ic:IC.star,badge:"review"},
@@ -527,7 +534,7 @@ function render(){
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
   const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, gastos:vGastos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
-    retornos:vRetornos, relatorios:vRelatorios,
+    retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -708,8 +715,14 @@ async function savePatient(id){
     alergias:g("f-alerg"),medicacoes:g("f-medic"),condicoesSistemicas:g("f-cond"),
   };
   if(!f.name || digits(f.phone).length<10){ toast("Preencha nome e telefone válido."); return; }
-  if(id){ await api("PUT",`/patients/${id}`,{...f,id}); } else { await api("POST","/patients",f); }
-  closeModal(); await reloadAll(); toast("Paciente salvo.");
+  if(id){
+    await api("PUT",`/patients/${id}`,{...f,id});
+    closeModal(); await reloadAll(); toast("Paciente salvo.");
+  } else {
+    const novo = await api("POST","/patients",f);
+    closeModal(); await reloadAll(); toast("Paciente cadastrado!");
+    abrirCompartilharAnamnese(novo.id, novo.name, novo.phone);
+  }
 }
 
 /* ════════════════════════════════════════════
@@ -2619,6 +2632,7 @@ function vFicha(){
     <button class="btn ghost sm" onclick="agendarPaciente('${p.id}')">${IC.cal} Agendar</button>
     <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
     <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
+    <button class="btn ghost sm" onclick="abrirCompartilharAnamnese('${p.id}','${esc(p.name)}','${esc(p.phone)}')">📤 Anamnese remota</button>
     <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
   </div>
 
@@ -3449,6 +3463,118 @@ async function setRetornoMeses(pid, v){
   await api("PUT",`/retorno/${pid}`,{meses});
   FICHA_RETORNO = meses;
   toast(meses?`Retorno deste paciente: ${meses} meses.`:"Retorno: padrão da clínica.");
+}
+
+/* ════════════════════════════════════════════
+   ANAMNESE REMOTA — link/QR pro paciente preencher sozinho (estilo
+   Codental). O que ele envia fica pendente até a equipe revisar; só aí
+   os dados entram no cadastro e a queixa principal vira uma evolução.
+════════════════════════════════════════════ */
+async function abrirCompartilharAnamnese(pid, nome, phone){
+  let r;
+  try{ r = await api("POST", `/patients/${pid}/anamnese-remota`); }
+  catch(e){ return; }
+  let qrSvg = "";
+  try{
+    const resp = await fetch(API + `/anamnese-remota/${r.id}/qrcode.svg`, {headers: AUTH_TOKEN?{Authorization:"Bearer "+AUTH_TOKEN}:{}});
+    if(resp.ok) qrSvg = await resp.text();
+  }catch(e){ /* sem QR, ainda dá pra copiar/enviar o link */ }
+  const primeiroNome = (nome||"").split(" ")[0];
+  const msg = `Olá ${primeiroNome}! Pode preencher sua anamnese antes da consulta por este link: ${r.link}`;
+  // wa() já devolve a URL com o texto percent-encoded (sem aspas nem espaços),
+  // por isso é seguro embutir direto num atributo onclick="..." — diferente de
+  // interpolar a mensagem crua, que quebraria o HTML se tivesse aspas dentro.
+  const waUrl = phone ? wa(phone, msg) : "";
+  modal("Compartilhar anamnese", `
+    <p class="meta" style="margin-bottom:10px">O paciente preenche pelo celular, sem precisar de login ou senha. Você revisa antes de confirmar no cadastro.</p>
+    <label class="f"><span>Link</span><input id="anamnese-link-input" value="${esc(r.link)}" readonly onclick="this.select()"></label>
+    <div class="acts" style="justify-content:flex-start;flex-wrap:wrap;margin-bottom:4px">
+      <button class="btn ghost sm" onclick="navigator.clipboard.writeText('${r.link}').then(()=>toast('Link copiado.'))">${IC.upload} Copiar link</button>
+      ${phone?`<button class="btn whats sm" onclick="window.open('${waUrl}','_blank')">${IC.send} Enviar pelo WhatsApp</button>`:""}
+    </div>
+    ${qrSvg?`<div style="margin-top:12px;text-align:center">
+      <div style="width:170px;height:170px;margin:0 auto">${qrSvg}</div>
+      <p class="meta" style="margin-top:6px">Ou peça pro paciente escanear o QR</p>
+    </div>`:""}
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button></div>`);
+}
+
+function vAnamneseRemota(){
+  const list = DB.anamneseRemota || [];
+  return header("Anamneses recebidas","Preenchidas pelo paciente, aguardando revisão antes de entrar no cadastro.")+
+  (list.length===0?empty("Nenhuma anamnese aguardando revisão."):
+  list.map(a=>queueCard(a.patientName, "Enviada em "+fmtDateTime(a.filledAt), null,
+    `<button class="btn sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`)).join(""));
+}
+async function abrirRevisaoAnamnese(id){
+  let d;
+  try{ d = await api("GET", `/anamnese-remota/${id}`); }catch(e){ return; }
+  const r = d.respostas || {};
+  const profs = DB.profissionais.filter(p=>p.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional antes de revisar."); return; }
+  modal(`Revisar anamnese — ${esc(d.patientName)}`, `
+    <p class="meta" style="margin-bottom:10px">Confira e ajuste os dados antes de confirmar. Só o que for aprovado aqui entra no cadastro.</p>
+    <label class="f"><span>Queixa principal</span><textarea id="ra-queixa" rows="3">${esc(r.queixaPrincipal||"")}</textarea></label>
+    <div class="grid g2">
+      <label class="f"><span>Nascimento</span><input type="date" id="ra-birth" value="${r.birth||""}"></label>
+      <label class="f"><span>E-mail</span><input id="ra-email" value="${esc(r.email||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>RG</span><input id="ra-rg" value="${esc(r.rg||"")}"></label>
+      <label class="f"><span>Órgão expedidor</span><input id="ra-orgao" value="${esc(r.orgaoExpedidor||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>CPF</span><input id="ra-cpf" value="${esc(r.cpf||"")}"></label>
+      <label class="f"><span>Estado civil</span><input id="ra-civil" value="${esc(r.estadoCivil||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Naturalidade</span><input id="ra-natur" value="${esc(r.naturalidade||"")}"></label>
+      <label class="f"><span>Nacionalidade</span><input id="ra-nac" value="${esc(r.nacionalidade||"")}"></label>
+    </div>
+    <div class="grid g2">
+      <label class="f"><span>Profissão</span><input id="ra-prof" value="${esc(r.profissao||"")}"></label>
+      <label class="f"><span>Local de trabalho</span><input id="ra-trab" value="${esc(r.localTrabalho||"")}"></label>
+    </div>
+    <label class="f"><span>Endereço residencial</span><input id="ra-end" value="${esc(r.enderecoResidencial||"")}"></label>
+    <label class="f"><span>Indicado por</span><input id="ra-indic" value="${esc(r.indicadoPor||"")}"></label>
+    <details ${r.respNome?"open":""} style="margin-bottom:11px">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#475569;padding:6px 0">👨‍👩‍👧 Responsável legal</summary>
+      <div style="padding-top:8px">
+        <label class="f"><span>Nome</span><input id="ra-r-nome" value="${esc(r.respNome||"")}"></label>
+        <div class="grid g2">
+          <label class="f"><span>RG</span><input id="ra-r-rg" value="${esc(r.respRg||"")}"></label>
+          <label class="f"><span>CPF</span><input id="ra-r-cpf" value="${esc(r.respCpf||"")}"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Telefone</span><input id="ra-r-tel" value="${esc(r.respTelefone||"")}"></label>
+          <label class="f"><span>E-mail</span><input id="ra-r-email" value="${esc(r.respEmail||"")}"></label>
+        </div>
+      </div>
+    </details>
+    <label class="f"><span>Alergias</span><input id="ra-alerg" value="${esc(r.alergias||"")}"></label>
+    <label class="f"><span>Medicações em uso</span><input id="ra-medic" value="${esc(r.medicacoes||"")}"></label>
+    <label class="f"><span>Condições sistêmicas</span><input id="ra-cond" value="${esc(r.condicoesSistemicas||"")}"></label>
+    <label class="f"><span>Dentista que está revisando *</span><select id="ra-revisor">${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div>`);
+}
+async function aprovarAnamneseRemota(id){
+  const g=i=>document.getElementById(i)?.value||"";
+  const profissionalId = parseInt(g("ra-revisor"));
+  if(!profissionalId){ toast("Selecione quem está revisando."); return; }
+  const payload = {
+    profissionalId,
+    birth: g("ra-birth")||null, email:g("ra-email"), rg:g("ra-rg"), orgaoExpedidor:g("ra-orgao"),
+    cpf:g("ra-cpf"), estadoCivil:g("ra-civil"), naturalidade:g("ra-natur"), nacionalidade:g("ra-nac"),
+    profissao:g("ra-prof"), localTrabalho:g("ra-trab"), enderecoResidencial:g("ra-end"), indicadoPor:g("ra-indic"),
+    respNome:g("ra-r-nome"), respRg:g("ra-r-rg"), respCpf:g("ra-r-cpf"), respTelefone:g("ra-r-tel"), respEmail:g("ra-r-email"),
+    alergias:g("ra-alerg"), medicacoes:g("ra-medic"), condicoesSistemicas:g("ra-cond"),
+    queixaPrincipal:g("ra-queixa"),
+  };
+  try{
+    await api("POST", `/anamnese-remota/${id}/aprovar`, payload);
+    closeModal(); await reloadAll(); toast("Anamnese confirmada e aplicada ao cadastro. ✅");
+  }catch(e){ /* toast já exibido pelo api() */ }
 }
 
 /* ════════════════════════════════════════════
@@ -4303,8 +4429,124 @@ async function renderPortalPaciente(token){
   });
 }
 
+/* ════════════════════════════════════════════
+   ANAMNESE PÚBLICA — página que o PACIENTE abre pelo link/QR, sem login.
+   Ele preenche e envia; fica pendente até a clínica revisar (não escreve
+   nada no cadastro por conta própria).
+════════════════════════════════════════════ */
+async function renderAnamnesePublica(token){
+  document.title = "Anamnese";
+  document.body.innerHTML = `<div id="anam-root" style="max-width:480px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#f8fafc">
+    <div style="text-align:center;padding:60px 0;color:#64748b"><span class="spinner" style="border-color:#0f766e;border-top-color:transparent"></span> Carregando…</div>
+  </div>`;
+  let d;
+  try{
+    const r = await fetch(API + "/anamnese-publica/" + encodeURIComponent(token));
+    if(!r.ok) throw new Error("not found");
+    d = await r.json();
+  }catch(e){
+    document.getElementById("anam-root").innerHTML = `<div style="text-align:center;padding:60px 20px;color:#64748b">
+      <div style="font-size:40px;margin-bottom:10px">🔒</div><p>Link inválido ou expirado. Peça um novo à clínica.</p></div>`;
+    return;
+  }
+  const root = document.getElementById("anam-root");
+  if(d.status === "preenchido" || d.status === "aprovado"){
+    root.innerHTML = `<div style="text-align:center;padding:60px 20px">
+      <div style="font-size:40px;margin-bottom:10px">✅</div>
+      <h2 style="font-size:17px;margin-bottom:8px">Recebemos sua anamnese!</h2>
+      <p style="color:#64748b;font-size:14px">${esc(d.clinicaNome||"A clínica")} vai revisar antes da sua consulta. Obrigado, ${esc((d.patientName||"").split(" ")[0])}!</p>
+    </div>`;
+    return;
+  }
+  root.innerHTML = `
+    <div style="margin-bottom:18px;text-align:center">
+      <h1 style="font-size:18px;margin:0;color:#0f172a">${esc(d.clinicaNome||"Anamnese")}</h1>
+      <p style="color:#64748b;font-size:13px;margin:4px 0 0">Olá, ${esc((d.patientName||"").split(" ")[0])}! Preencha com calma, é rapidinho.</p>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <h2>Queixa principal</h2>
+      <label class="f"><span>O que te trouxe à clínica?</span><textarea id="ap-queixa" rows="3" placeholder="Ex: dor no dente de trás, quero fazer limpeza..."></textarea></label>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <h2>Identificação</h2>
+      <div class="grid g2">
+        <label class="f"><span>Nascimento</span><input type="date" id="ap-birth"></label>
+        <label class="f"><span>E-mail</span><input id="ap-email" type="email"></label>
+      </div>
+      <div class="grid g2">
+        <label class="f"><span>RG</span><input id="ap-rg"></label>
+        <label class="f"><span>Órgão expedidor</span><input id="ap-orgao"></label>
+      </div>
+      <div class="grid g2">
+        <label class="f"><span>CPF</span><input id="ap-cpf" placeholder="000.000.000-00"></label>
+        <label class="f"><span>Estado civil</span><input id="ap-civil"></label>
+      </div>
+      <div class="grid g2">
+        <label class="f"><span>Naturalidade</span><input id="ap-natur"></label>
+        <label class="f"><span>Nacionalidade</span><input id="ap-nac" value="Brasileira"></label>
+      </div>
+      <div class="grid g2">
+        <label class="f"><span>Profissão</span><input id="ap-prof"></label>
+        <label class="f"><span>Local de trabalho</span><input id="ap-trab"></label>
+      </div>
+      <label class="f"><span>Endereço residencial</span><input id="ap-end"></label>
+      <label class="f"><span>Indicado por</span><input id="ap-indic" placeholder="Opcional"></label>
+    </div>
+    <details style="margin-bottom:12px">
+      <summary style="cursor:pointer;font-size:13.5px;font-weight:600;color:#0f766e;padding:6px 0">👨‍👩‍👧 Sou responsável por um paciente menor de idade</summary>
+      <div class="card" style="margin-top:8px">
+        <label class="f"><span>Seu nome</span><input id="ap-r-nome"></label>
+        <div class="grid g2">
+          <label class="f"><span>RG</span><input id="ap-r-rg"></label>
+          <label class="f"><span>CPF</span><input id="ap-r-cpf"></label>
+        </div>
+        <div class="grid g2">
+          <label class="f"><span>Telefone</span><input id="ap-r-tel"></label>
+          <label class="f"><span>E-mail</span><input id="ap-r-email"></label>
+        </div>
+      </div>
+    </details>
+    <div class="card" style="margin-bottom:16px;border-color:#fecdd3;background:#fff1f2">
+      <h2 style="color:var(--rose)">⚠️ Alertas de saúde</h2>
+      <label class="f"><span>Alergias</span><input id="ap-alerg" placeholder="Ex: Penicilina, Dipirona"></label>
+      <label class="f"><span>Medicações em uso</span><input id="ap-medic"></label>
+      <label class="f"><span>Condições sistêmicas</span><input id="ap-cond" placeholder="Ex: Diabetes, Hipertensão, Gestante"></label>
+    </div>
+    <button id="ap-enviar-btn" style="width:100%;padding:13px;background:#0f766e;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">Enviar anamnese</button>
+    <p style="text-align:center;font-size:11.5px;color:#94a3b8;margin-top:10px">Seus dados vão direto para a clínica e não são compartilhados com terceiros.</p>
+  `;
+  document.getElementById("ap-enviar-btn").addEventListener("click", async () => {
+    const g = i => document.getElementById(i)?.value || "";
+    const btn = document.getElementById("ap-enviar-btn");
+    btn.disabled = true; btn.textContent = "Enviando…";
+    try{
+      const r = await fetch(API + "/anamnese-publica/" + encodeURIComponent(token), {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          birth: g("ap-birth")||null, email:g("ap-email"), rg:g("ap-rg"), orgaoExpedidor:g("ap-orgao"),
+          cpf:g("ap-cpf"), estadoCivil:g("ap-civil"), naturalidade:g("ap-natur"), nacionalidade:g("ap-nac"),
+          profissao:g("ap-prof"), localTrabalho:g("ap-trab"), enderecoResidencial:g("ap-end"), indicadoPor:g("ap-indic"),
+          respNome:g("ap-r-nome"), respRg:g("ap-r-rg"), respCpf:g("ap-r-cpf"), respTelefone:g("ap-r-tel"), respEmail:g("ap-r-email"),
+          alergias:g("ap-alerg"), medicacoes:g("ap-medic"), condicoesSistemicas:g("ap-cond"),
+          queixaPrincipal:g("ap-queixa"),
+        }),
+      });
+      if(!r.ok) throw new Error("falhou");
+      root.innerHTML = `<div style="text-align:center;padding:60px 20px">
+        <div style="font-size:40px;margin-bottom:10px">✅</div>
+        <h2 style="font-size:17px;margin-bottom:8px">Enviado!</h2>
+        <p style="color:#64748b;font-size:14px">A clínica vai revisar antes da sua consulta. Obrigado!</p>
+      </div>`;
+    }catch(e){
+      btn.disabled = false; btn.textContent = "Enviar anamnese";
+      alert("Não foi possível enviar. Verifique sua conexão e tente de novo.");
+    }
+  });
+}
+
 (async function boot(){
   if(PORTAL_TOKEN){ await renderPortalPaciente(PORTAL_TOKEN); return; }
+  if(ANAMNESE_TOKEN){ await renderAnamnesePublica(ANAMNESE_TOKEN); return; }
   const params = new URLSearchParams(window.location.search);
   const verifyToken = params.get("verify");
   if(verifyToken){
