@@ -32,9 +32,9 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
-app = FastAPI(title="CRM Moura — Backend v2.8 (multi-tenant: fundação)")
+app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,7 +124,7 @@ def icon512():
 SESSAO_DIAS = 30
 AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
               "/api/signup", "/api/verify-email", "/api/resend-verification",
-              "/api/plataforma", "/api/portal")
+              "/api/plataforma", "/api/portal", "/api/anamnese-publica")
 
 
 def _hash_senha(senha: str) -> str:
@@ -984,6 +984,230 @@ def get_portal_paciente(token: str):
             ],
             "pixCopiaCola": pix_copia_cola,
         }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANAMNESE REMOTA  (link/QR pro PACIENTE preencher sozinho, sem login;
+# equipe revisa e aprova depois — só então os dados entram no cadastro)
+# ══════════════════════════════════════════════════════════════════════════════
+# Campos que o paciente pode preencher no formulário público. Espelha o que
+# openPatientForm já coleta manualmente — mesmo vocabulário, pra não haver
+# dois formatos de "identificação do paciente" no sistema.
+ANAMNESE_CAMPOS_IDENTIFICACAO = [
+    "birth", "rg", "orgaoExpedidor", "cpf", "naturalidade", "nacionalidade",
+    "estadoCivil", "profissao", "localTrabalho", "enderecoResidencial", "indicadoPor", "email",
+]
+ANAMNESE_CAMPOS_RESPONSAVEL = ["respNome", "respRg", "respCpf", "respTelefone", "respEmail"]
+ANAMNESE_CAMPOS_CLINICOS = ["alergias", "medicacoes", "condicoesSistemicas"]
+
+
+class AnamneseRespostasIn(BaseModel):
+    """Corpo enviado pelo PRÓPRIO paciente (rota pública, sem login)."""
+    birth: str | None = None
+    rg: str = ""
+    orgaoExpedidor: str = ""
+    cpf: str = ""
+    naturalidade: str = ""
+    nacionalidade: str = ""
+    estadoCivil: str = ""
+    profissao: str = ""
+    localTrabalho: str = ""
+    enderecoResidencial: str = ""
+    indicadoPor: str = ""
+    email: str = ""
+    respNome: str = ""
+    respRg: str = ""
+    respCpf: str = ""
+    respTelefone: str = ""
+    respEmail: str = ""
+    alergias: str = ""
+    medicacoes: str = ""
+    condicoesSistemicas: str = ""
+    queixaPrincipal: str = ""
+
+
+@app.post("/api/patients/{pid}/anamnese-remota", status_code=201)
+def criar_anamnese_remota(pid: str, request: Request):
+    """A equipe gera (ou reaproveita) o link pra este paciente preencher a
+    própria anamnese. Se já existir um link pendente/preenchido ainda não
+    aprovado, devolve o mesmo em vez de criar outro — evita links órfãos
+    quando a pessoa clica "gerar link" duas vezes por engano."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        existente = (
+            db.query(AnamneseRemota)
+            .filter(AnamneseRemota.patientId == pid, AnamneseRemota.clinicaId == quem.clinicaId,
+                    AnamneseRemota.status != "aprovado")
+            .order_by(AnamneseRemota.created_at.desc())
+            .first()
+        )
+        if existente:
+            a = existente
+        else:
+            a = AnamneseRemota(id=_new_id(), clinicaId=quem.clinicaId, patientId=pid,
+                                token=secrets.token_urlsafe(24), status="pendente")
+            db.add(a)
+            db.commit()
+            db.refresh(a)
+        return {"id": a.id, "token": a.token, "link": f"{APP_URL}/?anamnese={a.token}", "status": a.status}
+
+
+@app.get("/api/anamnese-remota/{aid}/qrcode.svg")
+def get_anamnese_qrcode(aid: str, request: Request):
+    """QR pro botão "Compartilhar anamnese" — mesmo padrão do QR da
+    carteirinha (token opaco, sem exigir login do paciente pra abrir)."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anamnese não encontrada.")
+        token = a.token
+    url = f"{APP_URL}/?anamnese={token}"
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
+@app.get("/api/anamnese-publica/{token}")
+def get_anamnese_publica(token: str):
+    """Rota pública (sem login) que o PACIENTE acessa pelo link/QR."""
+    with SessionLocal() as db:
+        a = db.query(AnamneseRemota).filter(AnamneseRemota.token == token).first()
+        if not a:
+            raise HTTPException(404, "Link inválido.")
+        pac = db.get(Paciente, a.patientId)
+        clinica = db.get(Clinica, a.clinicaId) if pac else None
+        return {
+            "status": a.status,
+            "patientName": pac.name if pac else "",
+            "clinicaNome": clinica.nome if clinica else "",
+        }
+
+
+@app.post("/api/anamnese-publica/{token}", status_code=201)
+def enviar_anamnese_publica(token: str, data: AnamneseRespostasIn):
+    """O PACIENTE envia as respostas. Fica pendente de revisão — nada é
+    aplicado ao cadastro ainda."""
+    with SessionLocal() as db:
+        a = db.query(AnamneseRemota).filter(AnamneseRemota.token == token).first()
+        if not a:
+            raise HTTPException(404, "Link inválido.")
+        if a.status == "aprovado":
+            raise HTTPException(410, "Esta anamnese já foi revisada pela clínica.")
+        a.respostas = json.dumps(data.model_dump(), ensure_ascii=False)
+        a.status = "preenchido"
+        a.filledAt = datetime.now()
+        db.commit()
+        return {"ok": True}
+
+
+@app.get("/api/anamnese-remota")
+def list_anamneses_pendentes(request: Request):
+    """Fila de revisão: anamneses que o paciente já preencheu e aguardam
+    confirmação da equipe."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        rows = (
+            db.query(AnamneseRemota)
+            .filter(AnamneseRemota.clinicaId == quem.clinicaId, AnamneseRemota.status == "preenchido")
+            .order_by(AnamneseRemota.filledAt.asc())
+            .all()
+        )
+        result = []
+        for a in rows:
+            pac = db.get(Paciente, a.patientId)
+            result.append({
+                "id": a.id, "patientId": a.patientId,
+                "patientName": pac.name if pac else "Paciente removido",
+                "patientPhone": pac.phone if pac else "",
+                "filledAt": a.filledAt.isoformat() if a.filledAt else None,
+            })
+        return result
+
+
+@app.get("/api/anamnese-remota/{aid}")
+def get_anamnese_detalhe(aid: str, request: Request):
+    """Detalhe completo pra tela de revisão — respostas do paciente já
+    decodificadas, prontas pra virar campos editáveis no formulário."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anamnese não encontrada.")
+        pac = db.get(Paciente, a.patientId)
+        respostas = json.loads(a.respostas) if a.respostas else {}
+        return {
+            "id": a.id, "patientId": a.patientId,
+            "patientName": pac.name if pac else "Paciente removido",
+            "status": a.status, "respostas": respostas,
+            "filledAt": a.filledAt.isoformat() if a.filledAt else None,
+        }
+
+
+class AprovarAnamneseIn(BaseModel):
+    profissionalId: int
+    # Campos revisados (possivelmente editados pela equipe) — mesmo shape de AnamneseRespostasIn.
+    birth: str | None = None
+    rg: str = ""
+    orgaoExpedidor: str = ""
+    cpf: str = ""
+    naturalidade: str = ""
+    nacionalidade: str = ""
+    estadoCivil: str = ""
+    profissao: str = ""
+    localTrabalho: str = ""
+    enderecoResidencial: str = ""
+    indicadoPor: str = ""
+    email: str = ""
+    respNome: str = ""
+    respRg: str = ""
+    respCpf: str = ""
+    respTelefone: str = ""
+    respEmail: str = ""
+    alergias: str = ""
+    medicacoes: str = ""
+    condicoesSistemicas: str = ""
+    queixaPrincipal: str = ""
+
+
+@app.post("/api/anamnese-remota/{aid}/aprovar", status_code=201)
+def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
+    """Confirma a anamnese: aplica os campos de identificação e alertas
+    clínicos ao cadastro do paciente, e registra a queixa principal como
+    uma evolução normal (mesma regra de autoria de qualquer evolução —
+    exige o profissional que revisou)."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anamnese não encontrada.")
+        if a.status == "aprovado":
+            raise HTTPException(409, "Esta anamnese já foi aprovada.")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado.")
+        pac = db.get(Paciente, a.patientId)
+        if not pac:
+            raise HTTPException(404, "Paciente não encontrado.")
+        for campo in ANAMNESE_CAMPOS_IDENTIFICACAO + ANAMNESE_CAMPOS_RESPONSAVEL + ANAMNESE_CAMPOS_CLINICOS:
+            valor = getattr(data, campo)
+            if valor:  # só sobrescreve o que veio preenchido — não apaga dado já existente com vazio
+                setattr(pac, campo, valor)
+        queixa = data.queixaPrincipal.strip() or "[Anamnese remota] Sem queixa principal relatada."
+        db.add(Evolucao(
+            id=_new_id(), clinicaId=quem.clinicaId, patientId=a.patientId, profissionalId=data.profissionalId,
+            denteRegiao="", procedimento="Anamnese inicial (preenchida remotamente pelo paciente)",
+            conteudo=queixa,
+        ))
+        a.status = "aprovado"
+        a.aprovadoPor = data.profissionalId
+        a.aprovadoEm = datetime.now()
+        a.respostas = json.dumps(data.model_dump(exclude={"profissionalId"}), ensure_ascii=False)
+        db.commit()
+        return {"ok": True}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
