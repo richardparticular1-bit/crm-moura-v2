@@ -1345,13 +1345,61 @@ def _resumo_respostas_clinicas(perguntas: list[dict], respostas_clinicas: dict) 
     return ("; ".join(alergias_bits), "; ".join(medic_bits), "; ".join(cond_bits), linhas)
 
 
+def _aplicar_anamnese_ao_cadastro(db, a: AnamneseRemota, quem: Usuario, data: "AprovarAnamneseIn", origem: str = "remota") -> None:
+    """Núcleo comum entre aprovar uma anamnese enviada pelo paciente e o
+    profissional preencher direto no sistema: aplica identificação/
+    responsável ao cadastro, resume as respostas clínicas nos campos de
+    alerta e registra queixa + Q&A como evolução. `a` já precisa existir
+    (persistido ou pendente de flush) e pertencer à clínica de quem chama."""
+    if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+        raise HTTPException(404, "Profissional não encontrado.")
+    pac = db.get(Paciente, a.patientId)
+    if not pac:
+        raise HTTPException(404, "Paciente não encontrado.")
+    for campo in ANAMNESE_CAMPOS_IDENTIFICACAO + ANAMNESE_CAMPOS_RESPONSAVEL:
+        valor = getattr(data, campo)
+        if valor:  # só sobrescreve o que veio preenchido — não apaga dado já existente com vazio
+            setattr(pac, campo, valor)
+
+    modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
+    perguntas = []
+    if modelo:
+        perguntas = [
+            {"id": p.id, "texto": p.texto}
+            for p in db.query(AnamnesePergunta).filter(AnamnesePergunta.modeloId == modelo.id)
+            .order_by(AnamnesePergunta.ordem.asc()).all()
+        ]
+    alergias_novas, medic_novas, cond_novas, linhas = _resumo_respostas_clinicas(perguntas, data.respostasClinicas)
+    if alergias_novas:
+        pac.alergias = (pac.alergias + "; " + alergias_novas) if pac.alergias else alergias_novas
+    if medic_novas:
+        pac.medicacoes = (pac.medicacoes + "; " + medic_novas) if pac.medicacoes else medic_novas
+    if cond_novas:
+        pac.condicoesSistemicas = (pac.condicoesSistemicas + "; " + cond_novas) if pac.condicoesSistemicas else cond_novas
+
+    origem_label = "preenchida remotamente pelo paciente" if origem == "remota" else "preenchida presencialmente pelo profissional"
+    queixa = data.queixaPrincipal.strip() or "[Anamnese] Sem queixa principal relatada."
+    conteudo_evolucao = queixa
+    if linhas:
+        titulo_modelo = f" ({modelo.nome})" if modelo else ""
+        conteudo_evolucao += f"\n\n--- Respostas da anamnese{titulo_modelo} ---\n" + "\n".join(linhas)
+    db.add(Evolucao(
+        id=_new_id(), clinicaId=quem.clinicaId, patientId=a.patientId, profissionalId=data.profissionalId,
+        denteRegiao="", procedimento=f"Anamnese inicial ({origem_label})",
+        conteudo=conteudo_evolucao,
+    ))
+    a.status = "aprovado"
+    a.aprovadoPor = data.profissionalId
+    a.aprovadoEm = datetime.now()
+    a.respostas = json.dumps(data.model_dump(exclude={"profissionalId"}), ensure_ascii=False)
+
+
 @app.post("/api/anamnese-remota/{aid}/aprovar", status_code=201)
 def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
-    """Confirma a anamnese: aplica os campos de identificação ao cadastro do
-    paciente, resume as respostas clínicas em alergias/medicações/condições
-    sistêmicas (por palavra-chave) e registra a queixa principal + o
-    Q&A completo como uma evolução normal — mesma regra de autoria de
-    qualquer evolução, exige o profissional que revisou."""
+    """Confirma a anamnese enviada pelo paciente: aplica os campos de
+    identificação ao cadastro, resume as respostas clínicas em alergias/
+    medicações/condições sistêmicas e registra a queixa principal + o Q&A
+    completo como evolução — exige o profissional que revisou."""
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         a = db.get(AnamneseRemota, aid)
@@ -1359,48 +1407,62 @@ def aprovar_anamnese(aid: str, data: AprovarAnamneseIn, request: Request):
             raise HTTPException(404, "Anamnese não encontrada.")
         if a.status == "aprovado":
             raise HTTPException(409, "Esta anamnese já foi aprovada.")
-        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
-            raise HTTPException(404, "Profissional não encontrado.")
-        pac = db.get(Paciente, a.patientId)
-        if not pac:
-            raise HTTPException(404, "Paciente não encontrado.")
-        for campo in ANAMNESE_CAMPOS_IDENTIFICACAO + ANAMNESE_CAMPOS_RESPONSAVEL:
-            valor = getattr(data, campo)
-            if valor:  # só sobrescreve o que veio preenchido — não apaga dado já existente com vazio
-                setattr(pac, campo, valor)
-
-        modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
-        perguntas = []
-        if modelo:
-            perguntas = [
-                {"id": p.id, "texto": p.texto}
-                for p in db.query(AnamnesePergunta).filter(AnamnesePergunta.modeloId == modelo.id)
-                .order_by(AnamnesePergunta.ordem.asc()).all()
-            ]
-        alergias_novas, medic_novas, cond_novas, linhas = _resumo_respostas_clinicas(perguntas, data.respostasClinicas)
-        if alergias_novas:
-            pac.alergias = (pac.alergias + "; " + alergias_novas) if pac.alergias else alergias_novas
-        if medic_novas:
-            pac.medicacoes = (pac.medicacoes + "; " + medic_novas) if pac.medicacoes else medic_novas
-        if cond_novas:
-            pac.condicoesSistemicas = (pac.condicoesSistemicas + "; " + cond_novas) if pac.condicoesSistemicas else cond_novas
-
-        queixa = data.queixaPrincipal.strip() or "[Anamnese remota] Sem queixa principal relatada."
-        conteudo_evolucao = queixa
-        if linhas:
-            titulo_modelo = f" ({modelo.nome})" if modelo else ""
-            conteudo_evolucao += f"\n\n--- Respostas da anamnese{titulo_modelo} ---\n" + "\n".join(linhas)
-        db.add(Evolucao(
-            id=_new_id(), clinicaId=quem.clinicaId, patientId=a.patientId, profissionalId=data.profissionalId,
-            denteRegiao="", procedimento="Anamnese inicial (preenchida remotamente pelo paciente)",
-            conteudo=conteudo_evolucao,
-        ))
-        a.status = "aprovado"
-        a.aprovadoPor = data.profissionalId
-        a.aprovadoEm = datetime.now()
-        a.respostas = json.dumps(data.model_dump(exclude={"profissionalId"}), ensure_ascii=False)
+        _aplicar_anamnese_ao_cadastro(db, a, quem, data, origem="remota")
         db.commit()
         return {"ok": True}
+
+
+class AnamnesePresencialIn(AprovarAnamneseIn):
+    modeloId: str
+
+
+@app.post("/api/patients/{pid}/anamnese-presencial", status_code=201)
+def preencher_anamnese_presencial(pid: str, data: AnamnesePresencialIn, request: Request):
+    """O PROFISSIONAL preenche a anamnese direto no sistema (presencial),
+    sem passar pelo link remoto — aplica ao cadastro na hora, sem etapa de
+    revisão separada, já que quem preencheu é quem está confirmando."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        modelo = db.get(AnamneseModelo, data.modeloId)
+        if not modelo or modelo.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Modelo de anamnese não encontrado.")
+        a = AnamneseRemota(id=_new_id(), clinicaId=quem.clinicaId, patientId=pid, modeloId=data.modeloId,
+                            token=secrets.token_urlsafe(24), status="preenchido", filledAt=datetime.now())
+        db.add(a)
+        db.flush()
+        _aplicar_anamnese_ao_cadastro(db, a, quem, data, origem="presencial")
+        db.commit()
+        return {"ok": True, "id": a.id}
+
+
+@app.get("/api/patients/{pid}/anamneses")
+def list_anamneses_paciente(pid: str, request: Request):
+    """Histórico de anamneses (remotas e presenciais) deste paciente, pra
+    reimprimir ou continuar uma revisão pendente a partir da Ficha."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        rows = (
+            db.query(AnamneseRemota)
+            .filter(AnamneseRemota.patientId == pid, AnamneseRemota.clinicaId == quem.clinicaId)
+            .order_by(AnamneseRemota.created_at.desc())
+            .all()
+        )
+        result = []
+        for a in rows:
+            modelo = db.get(AnamneseModelo, a.modeloId) if a.modeloId else None
+            result.append({
+                "id": a.id, "status": a.status, "modeloNome": modelo.nome if modelo else "",
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+                "filledAt": a.filledAt.isoformat() if a.filledAt else None,
+                "aprovadoEm": a.aprovadoEm.isoformat() if a.aprovadoEm else None,
+            })
+        return result
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSULTAS  (com profissional, prontuário, orçamento, duração)
