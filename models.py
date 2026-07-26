@@ -384,6 +384,30 @@ class ConsentimentoOrcamento(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class AnamneseModelo(Base):
+    """Modelo/template de anamnese (ex: Padrão, Infantil, Ortodôntica, Cirurgia
+    e Implante) — cada clínica tem os próprios, e pode editar/criar mais no
+    futuro. As perguntas clínicas ficam em AnamnesePergunta, em ordem."""
+    __tablename__ = "anamnese_modelos"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    nome: Mapped[str] = mapped_column(String(100))
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AnamnesePergunta(Base):
+    """Uma pergunta clínica de um modelo de anamnese. Sempre respondida como
+    Sim/Não/Não sei + campo de texto opcional ("informações adicionais"),
+    igual ao padrão do Codental — por isso não há coluna de "tipo"."""
+    __tablename__ = "anamnese_perguntas"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    modeloId: Mapped[str] = mapped_column(String(20), ForeignKey("anamnese_modelos.id"))
+    ordem: Mapped[int] = mapped_column(Integer, default=0)
+    texto: Mapped[str] = mapped_column(String(300))
+
+
 class AnamneseRemota(Base):
     """Link/QR para o PACIENTE preencher a própria anamnese remotamente,
     antes ou fora de uma consulta presencial — inspirado no fluxo do
@@ -400,6 +424,7 @@ class AnamneseRemota(Base):
     clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[str] = mapped_column(String(20), primary_key=True)
     patientId: Mapped[str] = mapped_column(String(20))
+    modeloId: Mapped[str | None] = mapped_column(String(20), ForeignKey("anamnese_modelos.id"), nullable=True)
     token: Mapped[str] = mapped_column(String(64), unique=True)
     status: Mapped[str] = mapped_column(String(20), default="pendente")
     respostas: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON com os campos enviados pelo paciente
