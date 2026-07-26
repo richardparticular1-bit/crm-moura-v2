@@ -3471,8 +3471,23 @@ async function setRetornoMeses(pid, v){
    os dados entram no cadastro e a queixa principal vira uma evolução.
 ════════════════════════════════════════════ */
 async function abrirCompartilharAnamnese(pid, nome, phone){
+  let modelos;
+  try{ modelos = await api("GET", "/anamnese-modelos"); }catch(e){ return; }
+  if(!modelos || modelos.length===0){ toast("Nenhum modelo de anamnese disponível."); return; }
+  modal("Preencher anamnese", `
+    <label class="f"><span>Modelo</span>
+      <select id="cba-modelo">${modelos.map(m=>`<option value="${m.id}">${esc(m.nome)}</option>`).join("")}</select>
+    </label>
+    <div id="cba-body">
+      <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn" onclick="_gerarLinkAnamnese('${pid}','${esc(nome)}','${esc(phone)}')">Gerar link para o paciente</button></div>
+    </div>`);
+}
+async function _gerarLinkAnamnese(pid, nome, phone){
+  const modeloId = document.getElementById("cba-modelo")?.value;
+  if(!modeloId){ toast("Selecione um modelo."); return; }
   let r;
-  try{ r = await api("POST", `/patients/${pid}/anamnese-remota`); }
+  try{ r = await api("POST", `/patients/${pid}/anamnese-remota`, {modeloId}); }
   catch(e){ return; }
   let qrSvg = "";
   try{
@@ -3485,8 +3500,8 @@ async function abrirCompartilharAnamnese(pid, nome, phone){
   // por isso é seguro embutir direto num atributo onclick="..." — diferente de
   // interpolar a mensagem crua, que quebraria o HTML se tivesse aspas dentro.
   const waUrl = phone ? wa(phone, msg) : "";
-  modal("Compartilhar anamnese", `
-    <p class="meta" style="margin-bottom:10px">O paciente preenche pelo celular, sem precisar de login ou senha. Você revisa antes de confirmar no cadastro.</p>
+  const body = document.getElementById("cba-body");
+  if(body) body.innerHTML = `
     <label class="f"><span>Link</span><input id="anamnese-link-input" value="${esc(r.link)}" readonly onclick="this.select()"></label>
     <div class="acts" style="justify-content:flex-start;flex-wrap:wrap;margin-bottom:4px">
       <button class="btn ghost sm" onclick="navigator.clipboard.writeText('${r.link}').then(()=>toast('Link copiado.'))">${IC.upload} Copiar link</button>
@@ -3496,7 +3511,7 @@ async function abrirCompartilharAnamnese(pid, nome, phone){
       <div style="width:170px;height:170px;margin:0 auto">${qrSvg}</div>
       <p class="meta" style="margin-top:6px">Ou peça pro paciente escanear o QR</p>
     </div>`:""}
-    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button></div>`);
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button></div>`;
 }
 
 function vAnamneseRemota(){
@@ -3510,11 +3525,27 @@ async function abrirRevisaoAnamnese(id){
   let d;
   try{ d = await api("GET", `/anamnese-remota/${id}`); }catch(e){ return; }
   const r = d.respostas || {};
+  const respClin = r.respostasClinicas || {};
   const profs = DB.profissionais.filter(p=>p.ativo);
   if(profs.length===0){ toast("Cadastre um profissional antes de revisar."); return; }
+  const perguntaHTML = p=>{
+    const rc = respClin[p.id] || {};
+    const resp = rc.resposta || "";
+    return `<div style="padding:9px 0;border-bottom:1px solid #f1f5f9">
+      <div style="font-size:13.5px;margin-bottom:6px">${esc(p.texto)}</div>
+      <div style="display:flex;gap:14px;margin-bottom:6px">
+        ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+            <input type="radio" name="rq-${p.id}" value="${v}" ${resp===v?"checked":""} style="width:auto">${lab}
+          </label>`).join("")}
+      </div>
+      <input id="rqi-${p.id}" value="${esc(rc.info||"")}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
+    </div>`;
+  };
   modal(`Revisar anamnese — ${esc(d.patientName)}`, `
-    <p class="meta" style="margin-bottom:10px">Confira e ajuste os dados antes de confirmar. Só o que for aprovado aqui entra no cadastro.</p>
+    <p class="meta" style="margin-bottom:10px">Confira e ajuste antes de confirmar. Só o que for aprovado aqui entra no cadastro.${d.modeloNome?` Modelo: <b>${esc(d.modeloNome)}</b>.`:""}</p>
     <label class="f"><span>Queixa principal</span><textarea id="ra-queixa" rows="3">${esc(r.queixaPrincipal||"")}</textarea></label>
+    ${d.perguntas && d.perguntas.length ? `<div style="margin-bottom:12px">${d.perguntas.map(perguntaHTML).join("")}</div>` : ""}
     <div class="grid g2">
       <label class="f"><span>Nascimento</span><input type="date" id="ra-birth" value="${r.birth||""}"></label>
       <label class="f"><span>E-mail</span><input id="ra-email" value="${esc(r.email||"")}"></label>
@@ -3551,25 +3582,28 @@ async function abrirRevisaoAnamnese(id){
         </div>
       </div>
     </details>
-    <label class="f"><span>Alergias</span><input id="ra-alerg" value="${esc(r.alergias||"")}"></label>
-    <label class="f"><span>Medicações em uso</span><input id="ra-medic" value="${esc(r.medicacoes||"")}"></label>
-    <label class="f"><span>Condições sistêmicas</span><input id="ra-cond" value="${esc(r.condicoesSistemicas||"")}"></label>
     <label class="f"><span>Dentista que está revisando *</span><select id="ra-revisor">${profs.map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join("")}</select></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div>`);
+  window._raPerguntas = d.perguntas || [];
 }
 async function aprovarAnamneseRemota(id){
   const g=i=>document.getElementById(i)?.value||"";
   const profissionalId = parseInt(g("ra-revisor"));
   if(!profissionalId){ toast("Selecione quem está revisando."); return; }
+  const respostasClinicas = {};
+  (window._raPerguntas||[]).forEach(p=>{
+    const sel = document.querySelector(`input[name="rq-${p.id}"]:checked`);
+    if(sel) respostasClinicas[p.id] = { resposta: sel.value, info: g(`rqi-${p.id}`) };
+  });
   const payload = {
     profissionalId,
     birth: g("ra-birth")||null, email:g("ra-email"), rg:g("ra-rg"), orgaoExpedidor:g("ra-orgao"),
     cpf:g("ra-cpf"), estadoCivil:g("ra-civil"), naturalidade:g("ra-natur"), nacionalidade:g("ra-nac"),
     profissao:g("ra-prof"), localTrabalho:g("ra-trab"), enderecoResidencial:g("ra-end"), indicadoPor:g("ra-indic"),
     respNome:g("ra-r-nome"), respRg:g("ra-r-rg"), respCpf:g("ra-r-cpf"), respTelefone:g("ra-r-tel"), respEmail:g("ra-r-email"),
-    alergias:g("ra-alerg"), medicacoes:g("ra-medic"), condicoesSistemicas:g("ra-cond"),
     queixaPrincipal:g("ra-queixa"),
+    respostasClinicas,
   };
   try{
     await api("POST", `/anamnese-remota/${id}/aprovar`, payload);
@@ -4461,12 +4495,25 @@ async function renderAnamnesePublica(token){
   root.innerHTML = `
     <div style="margin-bottom:18px;text-align:center">
       <h1 style="font-size:18px;margin:0;color:#0f172a">${esc(d.clinicaNome||"Anamnese")}</h1>
-      <p style="color:#64748b;font-size:13px;margin:4px 0 0">Olá, ${esc((d.patientName||"").split(" ")[0])}! Preencha com calma, é rapidinho.</p>
+      <p style="color:#64748b;font-size:13px;margin:4px 0 0">Olá, ${esc((d.patientName||"").split(" ")[0])}! Preencha com calma, é rapidinho.${d.modeloNome?` (${esc(d.modeloNome)})`:""}</p>
     </div>
     <div class="card" style="margin-bottom:12px">
       <h2>Queixa principal</h2>
       <label class="f"><span>O que te trouxe à clínica?</span><textarea id="ap-queixa" rows="3" placeholder="Ex: dor no dente de trás, quero fazer limpeza..."></textarea></label>
     </div>
+    ${d.perguntas && d.perguntas.length ? `<div class="card" style="margin-bottom:12px">
+      <h2>Perguntas de saúde</h2>
+      ${d.perguntas.map(p=>`<div style="padding:9px 0;border-bottom:1px solid #f1f5f9">
+        <div style="font-size:13.5px;margin-bottom:6px">${esc(p.texto)}</div>
+        <div style="display:flex;gap:14px;margin-bottom:6px">
+          ${[["sim","Sim"],["nao","Não"],["nao_sei","Não sei"]].map(([v,lab])=>`
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer">
+              <input type="radio" name="apq-${p.id}" value="${v}" style="width:auto">${lab}
+            </label>`).join("")}
+        </div>
+        <input id="apqi-${p.id}" placeholder="Informações adicionais (opcional)" style="font-size:13px;padding:6px 9px">
+      </div>`).join("")}
+    </div>` : ""}
     <div class="card" style="margin-bottom:12px">
       <h2>Identificação</h2>
       <div class="grid g2">
@@ -4492,7 +4539,7 @@ async function renderAnamnesePublica(token){
       <label class="f"><span>Endereço residencial</span><input id="ap-end"></label>
       <label class="f"><span>Indicado por</span><input id="ap-indic" placeholder="Opcional"></label>
     </div>
-    <details style="margin-bottom:12px">
+    <details style="margin-bottom:16px">
       <summary style="cursor:pointer;font-size:13.5px;font-weight:600;color:#0f766e;padding:6px 0">👨‍👩‍👧 Sou responsável por um paciente menor de idade</summary>
       <div class="card" style="margin-top:8px">
         <label class="f"><span>Seu nome</span><input id="ap-r-nome"></label>
@@ -4506,12 +4553,6 @@ async function renderAnamnesePublica(token){
         </div>
       </div>
     </details>
-    <div class="card" style="margin-bottom:16px;border-color:#fecdd3;background:#fff1f2">
-      <h2 style="color:var(--rose)">⚠️ Alertas de saúde</h2>
-      <label class="f"><span>Alergias</span><input id="ap-alerg" placeholder="Ex: Penicilina, Dipirona"></label>
-      <label class="f"><span>Medicações em uso</span><input id="ap-medic"></label>
-      <label class="f"><span>Condições sistêmicas</span><input id="ap-cond" placeholder="Ex: Diabetes, Hipertensão, Gestante"></label>
-    </div>
     <button id="ap-enviar-btn" style="width:100%;padding:13px;background:#0f766e;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer">Enviar anamnese</button>
     <p style="text-align:center;font-size:11.5px;color:#94a3b8;margin-top:10px">Seus dados vão direto para a clínica e não são compartilhados com terceiros.</p>
   `;
@@ -4519,6 +4560,11 @@ async function renderAnamnesePublica(token){
     const g = i => document.getElementById(i)?.value || "";
     const btn = document.getElementById("ap-enviar-btn");
     btn.disabled = true; btn.textContent = "Enviando…";
+    const respostasClinicas = {};
+    (d.perguntas||[]).forEach(p=>{
+      const sel = document.querySelector(`input[name="apq-${p.id}"]:checked`);
+      if(sel) respostasClinicas[p.id] = { resposta: sel.value, info: g(`apqi-${p.id}`) };
+    });
     try{
       const r = await fetch(API + "/anamnese-publica/" + encodeURIComponent(token), {
         method: "POST", headers: {"Content-Type":"application/json"},
@@ -4527,8 +4573,8 @@ async function renderAnamnesePublica(token){
           cpf:g("ap-cpf"), estadoCivil:g("ap-civil"), naturalidade:g("ap-natur"), nacionalidade:g("ap-nac"),
           profissao:g("ap-prof"), localTrabalho:g("ap-trab"), enderecoResidencial:g("ap-end"), indicadoPor:g("ap-indic"),
           respNome:g("ap-r-nome"), respRg:g("ap-r-rg"), respCpf:g("ap-r-cpf"), respTelefone:g("ap-r-tel"), respEmail:g("ap-r-email"),
-          alergias:g("ap-alerg"), medicacoes:g("ap-medic"), condicoesSistemicas:g("ap-cond"),
           queixaPrincipal:g("ap-queixa"),
+          respostasClinicas,
         }),
       });
       if(!r.ok) throw new Error("falhou");
