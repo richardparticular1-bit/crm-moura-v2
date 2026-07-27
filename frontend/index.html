@@ -3762,8 +3762,15 @@ function vFichaAnamnesesSection(p){
         ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`:""}
         ${a.status!=="pendente" && !a.temAssinatura?`<button class="btn ghost sm" onclick="abrirColherAssinaturaAnamnese('${a.id}')">✍️ Colher assinatura</button>`:""}
         ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>`:""}
+        <button class="icon-btn del" onclick="delAnamnese('${a.id}')" aria-label="Excluir" title="Excluir">${IC.trash}</button>
       </div>`).join("")}
   </div>`;
+}
+async function delAnamnese(aid){
+  if(!confirm("Excluir este registro de anamnese? Isso não desfaz o que já foi aplicado ao cadastro nem remove a evolução gerada na aprovação.")) return;
+  await api("DELETE", `/anamnese-remota/${aid}`);
+  if(TAB==="ficha" && FICHA_ID){ FICHA_ANAMNESES = await api("GET", `/patients/${FICHA_ID}/anamneses`); render(); }
+  toast("Anamnese excluída.");
 }
 function abrirColherAssinaturaAnamnese(aid){
   modal("Colher assinatura", `
