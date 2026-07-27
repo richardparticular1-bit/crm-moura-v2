@@ -231,6 +231,7 @@ let FICHA_ID = null;          // paciente aberto na ficha (prontuário)
 let FICHA_EVOLUCOES = [];     // evoluções carregadas do paciente da ficha
 let FICHA_ANEXOS = [];        // anexos carregados do paciente da ficha
 let FICHA_ANAMNESES = [];     // histórico de anamneses (remotas e presenciais) do paciente da ficha
+let FICHA_DOCUMENTOS = [];    // histórico de documentos emitidos (prescrição, atestado) do paciente da ficha
 const ANEXO_THUMB_CACHE = {}; // id do anexo -> URL assinada já carregada (evita refazer a assinatura a cada render)
 let ORC_FILTRO = "todos";     // todos | rascunho | apresentado | aprovado | recusado
 let REL_MES = todayISO().slice(0,7);  // mês do relatório por dentista
@@ -2172,18 +2173,20 @@ async function openFicha(pid){
   FICHA_EVOLUCOES = [];
   FICHA_ANEXOS = [];
   FICHA_ANAMNESES = [];
+  FICHA_DOCUMENTOS = [];
   FICHA_ODONTO = { estado:{}, historico:[], datasDisponiveis:[] };
   ODONTO_DATA_VIEW = null;
   FICHA_CONSENTIMENTOS = { estado:{}, historico:[], tipos:{} };
   TAB = "ficha";
   render(); // mostra a ficha imediatamente
-  const [ev, ax, ret, anam] = await Promise.all([
+  const [ev, ax, ret, anam, docs] = await Promise.all([
     api("GET", `/evolucoes?patient_id=${encodeURIComponent(pid)}`),
     api("GET", `/anexos?patient_id=${encodeURIComponent(pid)}`),
     api("GET", `/retorno/${encodeURIComponent(pid)}`),
     api("GET", `/patients/${encodeURIComponent(pid)}/anamneses`),
+    api("GET", `/patients/${encodeURIComponent(pid)}/documentos`),
   ]);
-  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses; FICHA_ANAMNESES = anam;
+  FICHA_EVOLUCOES = ev; FICHA_ANEXOS = ax; FICHA_RETORNO = ret.meses; FICHA_ANAMNESES = anam; FICHA_DOCUMENTOS = docs;
   if(TAB==="ficha" && FICHA_ID===pid) render(); // atualiza com os dados carregados
   carregarFotoFicha(pid);
   carregarOdontograma(pid);
@@ -2763,6 +2766,8 @@ function vFicha(){
     </div>
     <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${p.id}','${esc(p.name)}')">✍️ Coletar assinatura</button>
   </div>
+
+  ${vFichaDocumentosSection(p)}
 
   ${vFichaAnamnesesSection(p)}
 
@@ -3741,6 +3746,190 @@ async function salvarAnamnesePresencial(pid){
     <p style="font-size:14px;margin-bottom:16px">Anamnese salva e aplicada ao prontuário de ${esc(p?p.name:"")}. ✅</p>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
     <button class="btn" onclick="closeModal();imprimirAnamnesePreenchida('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+}
+
+/* ════════════════════════════════════════════
+   DOCUMENTOS EMITIDOS — prescrição e atestado, com timbre da clínica e
+   assinatura do profissional. Atalhos de medicamentos comuns só preenchem
+   o item (nome + posologia padrão); o dentista sempre revisa e edita antes
+   de emitir — a decisão clínica nunca é automática.
+════════════════════════════════════════════ */
+const RECEITA_ATALHOS = [
+  {medicamento:"Amoxicilina 500mg", posologia:"1 cápsula, via oral, de 8/8h, por 7 dias"},
+  {medicamento:"Amoxicilina + Clavulanato 875mg/125mg", posologia:"1 comprimido, via oral, de 12/12h, por 7 dias"},
+  {medicamento:"Clindamicina 300mg", posologia:"1 cápsula, via oral, de 6/6h, por 7 dias"},
+  {medicamento:"Azitromicina 500mg", posologia:"1 comprimido, via oral, 1x ao dia, por 3 dias"},
+  {medicamento:"Nimesulida 100mg", posologia:"1 comprimido, via oral, de 12/12h, por 3 dias"},
+  {medicamento:"Ibuprofeno 600mg", posologia:"1 comprimido, via oral, de 8/8h, por 3 dias"},
+  {medicamento:"Diclofenaco de potássio 50mg", posologia:"1 comprimido, via oral, de 8/8h, por 3 dias"},
+  {medicamento:"Dipirona sódica 500mg", posologia:"1 comprimido, via oral, de 6/6h, se dor"},
+  {medicamento:"Paracetamol 750mg", posologia:"1 comprimido, via oral, de 6/6h, se dor"},
+  {medicamento:"Dexametasona 4mg", posologia:"1 comprimido, via oral, dose única"},
+  {medicamento:"Clorexidina 0,12% (colutório)", posologia:"Bochechar 15ml por 30 segundos, 2x ao dia, por 7 dias"},
+];
+const DOC_TIPO_LABEL = { prescricao:"Prescrição", atestado:"Atestado" };
+
+function _presItemRow(it){
+  it = it || {medicamento:"", posologia:""};
+  return `<div class="pres-item" style="display:grid;grid-template-columns:1.3fr 1.7fr 32px;gap:6px;margin-bottom:6px;align-items:center">
+    <input class="pi-med" value="${esc(it.medicamento)}" placeholder="Medicamento" style="font-size:13px;padding:7px 9px">
+    <input class="pi-pos" value="${esc(it.posologia)}" placeholder="Posologia" style="font-size:13px;padding:7px 9px">
+    <button class="icon-btn del" onclick="this.closest('.pres-item').remove()" title="Remover">${IC.x}</button>
+  </div>`;
+}
+function addPresItem(it){
+  document.getElementById("pres-itens").insertAdjacentHTML("beforeend", _presItemRow(it));
+}
+function abrirPrescricaoForm(pid){
+  const p = pById(pid); if(!p) return;
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional antes de emitir."); return; }
+  modal(`Prescrição — ${esc(p.name)}`, `
+    <label class="f"><span>Dentista responsável *</span><select id="pres-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <div style="margin-bottom:10px">
+      <span class="meta" style="display:block;margin-bottom:6px">Atalhos (clique pra adicionar, depois edite se precisar):</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${RECEITA_ATALHOS.map(a=>`<button class="btn ghost sm" style="font-size:11.5px;padding:5px 9px" onclick='addPresItem(${JSON.stringify(a)})'>${esc(a.medicamento)}</button>`).join("")}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1.3fr 1.7fr 32px;gap:6px;margin-bottom:4px" class="meta">
+      <span>Medicamento</span><span>Posologia</span><span></span>
+    </div>
+    <div id="pres-itens"></div>
+    <button class="btn ghost sm" onclick="addPresItem()" style="margin:4px 0 12px">${IC.plus} Adicionar item</button>
+    <label class="f"><span>Observações</span><textarea id="pres-obs" rows="2" placeholder="Opcional"></textarea></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarPrescricao('${pid}')">Emitir</button></div>`);
+  addPresItem();
+}
+async function salvarPrescricao(pid){
+  const profissionalId = parseInt(document.getElementById("pres-prof").value);
+  const itens = [];
+  document.querySelectorAll("#pres-itens .pres-item").forEach(r=>{
+    const medicamento = r.querySelector(".pi-med").value.trim();
+    const posologia = r.querySelector(".pi-pos").value.trim();
+    if(medicamento || posologia) itens.push({medicamento, posologia});
+  });
+  if(itens.length===0){ toast("Adicione pelo menos um medicamento."); return; }
+  if(itens.some(i=>!i.medicamento)){ toast("Todo item precisa do nome do medicamento."); return; }
+  const observacoes = document.getElementById("pres-obs").value;
+  let r;
+  try{ r = await api("POST", `/patients/${pid}/documentos`, {tipo:"prescricao", profissionalId, itens, observacoes}); }
+  catch(e){ return; }
+  closeModal();
+  if(TAB==="ficha" && FICHA_ID===pid){ FICHA_DOCUMENTOS = await api("GET", `/patients/${pid}/documentos`); render(); }
+  modal("Prescrição emitida", `
+    <p style="font-size:14px;margin-bottom:16px">Prescrição registrada. ✅</p>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+}
+
+function abrirAtestadoForm(pid){
+  const p = pById(pid); if(!p) return;
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional antes de emitir."); return; }
+  modal(`Atestado — ${esc(p.name)}`, `
+    <label class="f"><span>Dentista responsável *</span><select id="at-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <div class="grid g2">
+      <label class="f"><span>Data do atendimento</span><input type="date" id="at-data" value="${todayISO()}"></label>
+      <label class="f"><span>Horário</span><input type="time" id="at-hora" value="${new Date().toTimeString().slice(0,5)}"></label>
+    </div>
+    <label class="f"><span>Motivo</span><textarea id="at-motivo" rows="2" placeholder="Ex: procedimento odontológico"></textarea></label>
+    <div class="grid g2">
+      <label class="f"><span>Dias de afastamento</span><input type="number" min="0" id="at-dias" placeholder="Opcional"></label>
+      <label class="f"><span>CID</span><input id="at-cid" placeholder="Opcional"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarAtestado('${pid}')">Emitir</button></div>`);
+}
+async function salvarAtestado(pid){
+  const g=i=>document.getElementById(i)?.value||"";
+  const profissionalId = parseInt(g("at-prof"));
+  const motivo = g("at-motivo").trim();
+  const dias = g("at-dias") ? parseInt(g("at-dias")) : null;
+  if(!motivo && !dias){ toast("Informe o motivo ou os dias de afastamento."); return; }
+  let r;
+  try{
+    r = await api("POST", `/patients/${pid}/documentos`, {
+      tipo:"atestado", profissionalId, motivo, dias,
+      dataAtendimento: g("at-data")||todayISO(), horaAtendimento: g("at-hora"), cid: g("at-cid"),
+    });
+  }catch(e){ return; }
+  closeModal();
+  if(TAB==="ficha" && FICHA_ID===pid){ FICHA_DOCUMENTOS = await api("GET", `/patients/${pid}/documentos`); render(); }
+  modal("Atestado emitido", `
+    <p style="font-size:14px;margin-bottom:16px">Atestado registrado. ✅</p>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+}
+
+function vFichaDocumentosSection(p){
+  const list = FICHA_DOCUMENTOS || [];
+  return `<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">Documentos ${list.length?`(${list.length})`:""}</h2>
+      <div style="display:flex;gap:6px">
+        <button class="btn ghost sm" onclick="abrirPrescricaoForm('${p.id}')">💊 Prescrição</button>
+        <button class="btn ghost sm" onclick="abrirAtestadoForm('${p.id}')">📋 Atestado</button>
+      </div>
+    </div>
+    ${list.length===0?`<div style="color:var(--soft);font-size:14px">Nenhum documento emitido ainda.</div>`:
+      list.map(d=>`
+      <div class="row">
+        <div class="grow">
+          <div style="font-weight:500;font-size:14px">${DOC_TIPO_LABEL[d.tipo]||d.tipo}</div>
+          <div class="meta">${fmtDateTime(d.created_at)}${d.profissionalNome?" · "+esc(d.profissionalNome):""}</div>
+        </div>
+        <button class="icon-btn" onclick="imprimirDocumentoEmitido('${d.id}')" title="Imprimir">${IC.print}</button>
+        <button class="icon-btn del" onclick="delDocumentoEmitido('${d.id}')" aria-label="Excluir">${IC.trash}</button>
+      </div>`).join("")}
+  </div>`;
+}
+async function delDocumentoEmitido(id){
+  if(!confirm("Excluir este documento do histórico?")) return;
+  await api("DELETE", `/documentos/${id}`);
+  if(TAB==="ficha" && FICHA_ID){ FICHA_DOCUMENTOS = await api("GET", `/patients/${FICHA_ID}/documentos`); render(); }
+  toast("Documento excluído.");
+}
+async function imprimirDocumentoEmitido(id){
+  // window.open precisa ser chamado JÁ, sem nenhum await antes — senão o
+  // navegador não reconhece mais como gesto do usuário e bloqueia o pop-up.
+  const win = window.open("", "_blank");
+  if(win) win.document.write("<p style='font-family:sans-serif;padding:40px;color:#666'>Gerando documento…</p>");
+  let d;
+  try{ d = await api("GET", `/documentos/${id}`); }catch(e){ if(win) win.close(); return; }
+  let sigProfUrl = null;
+  if(d.profissionalId){
+    try{ sigProfUrl = (await api("GET", `/profissionais/${d.profissionalId}/assinatura/url`)).url; }catch(e){ /* segue sem a imagem */ }
+  }
+  const c = d.conteudo || {};
+  const assinaturaHTML = `<div style="text-align:center;margin-top:60px">
+    ${sigProfUrl?`<img src="${sigProfUrl}" style="max-height:60px;display:block;margin:0 auto 4px">`:""}
+    <div class="doc-sig" style="display:inline-block"><div class="line"></div>${esc(d.profissionalNome)}${d.profissionalCro?" — CRO "+esc(d.profissionalCro):""}</div>
+  </div>`;
+  let corpo;
+  if(d.tipo === "prescricao"){
+    corpo = `
+      <h1>Receituário</h1>
+      <p style="font-size:13px;margin:0 0 14px"><b>Paciente:</b> ${esc(d.patientName)}</p>
+      <table>
+        <thead><tr><th>Medicamento</th><th>Posologia</th></tr></thead>
+        <tbody>${(c.itens||[]).map(it=>`<tr><td>${esc(it.medicamento)}</td><td>${esc(it.posologia)}</td></tr>`).join("")}</tbody>
+      </table>
+      ${c.observacoes?`<p style="font-size:12.5px;margin-top:10px"><b>Observações:</b> ${esc(c.observacoes)}</p>`:""}
+      ${assinaturaHTML}`;
+  } else {
+    const dataFmt = c.dataAtendimento ? fmtDate(c.dataAtendimento) : fmtDate(todayISO());
+    corpo = `
+      <h1>Atestado Odontológico</h1>
+      <p style="font-size:13.5px;line-height:1.9;margin-top:20px">
+        Atesto, para os devidos fins, que o(a) paciente <b>${esc(d.patientName)}</b>${d.patientCpf?`, CPF ${esc(d.patientCpf)},`:""}
+        esteve sob meus cuidados odontológicos em <b>${dataFmt}</b>${c.horaAtendimento?` às ${esc(c.horaAtendimento)}`:""}${c.motivo?`, devido a ${esc(c.motivo)}`:""}${c.dias?`, necessitando de <b>${c.dias} dia(s)</b> de afastamento de suas atividades a partir desta data`:""}.
+        ${c.cid?`<br><br>CID: ${esc(c.cid)}`:""}
+      </p>
+      ${assinaturaHTML}`;
+  }
+  _abrirDocImpressao(win, `${d.tipo==="prescricao"?"Receituário":"Atestado"} - ${d.patientName}`, corpo);
 }
 
 /* ── histórico de anamneses na Ficha + impressão (remota ou presencial) ── */
