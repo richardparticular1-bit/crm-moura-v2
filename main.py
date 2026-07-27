@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
 
@@ -1535,6 +1535,107 @@ def delete_anamnese(aid: str, request: Request):
         db.commit()
     if path:
         _sb_delete(path)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DOCUMENTOS EMITIDOS  (prescrição, atestado — com timbre e assinatura do profissional)
+# ══════════════════════════════════════════════════════════════════════════════
+DOCUMENTO_TIPOS_VALIDOS = {"prescricao", "atestado"}
+
+
+class DocumentoIn(BaseModel):
+    profissionalId: int
+    tipo: str
+    # prescrição:
+    itens: list[dict] = []  # [{"medicamento": "...", "posologia": "..."}]
+    observacoes: str = ""
+    # atestado:
+    motivo: str = ""
+    dias: int | None = None
+    dataAtendimento: str | None = None
+    horaAtendimento: str = ""
+    cid: str = ""
+
+
+@app.post("/api/patients/{pid}/documentos", status_code=201)
+def criar_documento(pid: str, data: DocumentoIn, request: Request):
+    quem = _usuario_logado(request)
+    if data.tipo not in DOCUMENTO_TIPOS_VALIDOS:
+        raise HTTPException(422, "Tipo de documento inválido.")
+    with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
+            raise HTTPException(404, "Profissional não encontrado.")
+        if data.tipo == "prescricao":
+            itens = [i for i in data.itens if (i.get("medicamento") or "").strip()]
+            if not itens:
+                raise HTTPException(422, "Adicione pelo menos um medicamento.")
+        if data.tipo == "atestado" and not data.motivo.strip() and not data.dias:
+            raise HTTPException(422, "Informe o motivo ou os dias de afastamento.")
+        conteudo = data.model_dump(exclude={"profissionalId", "tipo"})
+        d = DocumentoEmitido(
+            id=_new_id(), clinicaId=quem.clinicaId, patientId=pid, profissionalId=data.profissionalId,
+            tipo=data.tipo, conteudo=json.dumps(conteudo, ensure_ascii=False),
+        )
+        db.add(d)
+        db.commit()
+        return {"id": d.id}
+
+
+@app.get("/api/patients/{pid}/documentos")
+def list_documentos_paciente(pid: str, request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        pac = db.get(Paciente, pid)
+        if not pac or pac.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Paciente não encontrado.")
+        rows = (
+            db.query(DocumentoEmitido)
+            .filter(DocumentoEmitido.patientId == pid, DocumentoEmitido.clinicaId == quem.clinicaId)
+            .order_by(DocumentoEmitido.created_at.desc())
+            .all()
+        )
+        result = []
+        for d in rows:
+            prof = db.get(Profissional, d.profissionalId)
+            result.append({
+                "id": d.id, "tipo": d.tipo, "profissionalNome": prof.nome if prof else "",
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+            })
+        return result
+
+
+@app.get("/api/documentos/{did}")
+def get_documento(did: str, request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        d = db.get(DocumentoEmitido, did)
+        if not d or d.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Documento não encontrado.")
+        pac = db.get(Paciente, d.patientId)
+        prof = db.get(Profissional, d.profissionalId)
+        conteudo = json.loads(d.conteudo) if d.conteudo else {}
+        return {
+            "id": d.id, "tipo": d.tipo, "conteudo": conteudo,
+            "patientName": pac.name if pac else "Paciente removido",
+            "patientCpf": pac.cpf if pac else "",
+            "profissionalId": d.profissionalId,
+            "profissionalNome": prof.nome if prof else "",
+            "profissionalCro": prof.cro if prof else "",
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+
+
+@app.delete("/api/documentos/{did}", status_code=204)
+def delete_documento(did: str, request: Request):
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        d = db.get(DocumentoEmitido, did)
+        if not d or d.clinicaId != quem.clinicaId:
+            raise HTTPException(404)
+        db.delete(d)
+        db.commit()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSULTAS  (com profissional, prontuário, orçamento, duração)
