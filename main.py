@@ -1517,6 +1517,25 @@ def list_anamneses_paciente(pid: str, request: Request):
             })
         return result
 
+
+@app.delete("/api/anamnese-remota/{aid}", status_code=204)
+def delete_anamnese(aid: str, request: Request):
+    """Exclui o registro da anamnese (link, respostas e assinatura, se
+    houver). NÃO desfaz o que já foi aplicado ao cadastro do paciente nem
+    remove a evolução gerada numa aprovação — esses continuam como registro
+    clínico, mesmo que a anamnese de origem (ex: um teste) seja excluída
+    depois."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        a = db.get(AnamneseRemota, aid)
+        if not a or a.clinicaId != quem.clinicaId:
+            raise HTTPException(404, "Anamnese não encontrada.")
+        path = a.assinaturaPath
+        db.delete(a)
+        db.commit()
+    if path:
+        _sb_delete(path)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSULTAS  (com profissional, prontuário, orçamento, duração)
 # ══════════════════════════════════════════════════════════════════════════════
