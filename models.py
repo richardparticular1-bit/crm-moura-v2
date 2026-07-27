@@ -384,6 +384,21 @@ class ConsentimentoOrcamento(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class DocumentoEmitido(Base):
+    """Documento emitido pro paciente — prescrição ou atestado — com timbre
+    da clínica e assinatura do profissional. Guardado pra reimprimir depois;
+    o conteúdo específico de cada tipo (itens da receita, motivo do
+    atestado...) fica em JSON, já que os campos variam por tipo."""
+    __tablename__ = "documentos_emitidos"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    patientId: Mapped[str] = mapped_column(String(20))
+    profissionalId: Mapped[int] = mapped_column(Integer, ForeignKey("profissionais.id"))
+    tipo: Mapped[str] = mapped_column(String(20))  # prescricao | atestado
+    conteudo: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
 class AnamneseModelo(Base):
     """Modelo/template de anamnese (ex: Padrão, Infantil, Ortodôntica, Cirurgia
     e Implante) — cada clínica tem os próprios, e pode editar/criar mais no
