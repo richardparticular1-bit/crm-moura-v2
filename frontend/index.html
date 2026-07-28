@@ -216,6 +216,7 @@ const IC = {
   print:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
   alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   clip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>',
+  eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
 };
 
 /* ── estado global ── */
@@ -3530,7 +3531,7 @@ function vAnamneseRemota(){
   return header("Anamneses recebidas","Preenchidas pelo paciente, aguardando revisão antes de entrar no cadastro.")+
   (list.length===0?empty("Nenhuma anamnese aguardando revisão."):
   list.map(a=>queueCard(a.patientName, "Enviada em "+fmtDateTime(a.filledAt), null,
-    `<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>
+    `<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Visualizar">${IC.eye}</button>
      <button class="btn sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`)).join(""));
 }
 async function abrirRevisaoAnamnese(id){
@@ -3598,7 +3599,7 @@ async function abrirRevisaoAnamnese(id){
     ${!d.temAssinatura?`<p class="meta" style="color:var(--rose);margin-bottom:8px">⚠️ Assinatura pendente — o paciente ainda não assinou.</p>`:""}
     <div class="acts" style="justify-content:space-between">
     <div style="display:flex;gap:8px">
-      <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.print} Imprimir</button>
+      <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.eye} Visualizar</button>
       ${d.temAssinatura?`<button class="btn ghost" onclick="verAssinaturaAnamnese('${id}')">✍️ Ver assinatura</button>`:`<button class="btn ghost" onclick="abrirColherAssinaturaAnamnese('${id}')">✍️ Colher assinatura</button>`}
     </div>
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
@@ -3880,7 +3881,7 @@ function vFichaDocumentosSection(p){
           <div style="font-weight:500;font-size:14px">${DOC_TIPO_LABEL[d.tipo]||d.tipo}</div>
           <div class="meta">${fmtDateTime(d.created_at)}${d.profissionalNome?" · "+esc(d.profissionalNome):""}</div>
         </div>
-        <button class="icon-btn" onclick="imprimirDocumentoEmitido('${d.id}')" title="Imprimir">${IC.print}</button>
+        <button class="icon-btn" onclick="imprimirDocumentoEmitido('${d.id}')" title="Visualizar">${IC.eye}</button>
         <button class="icon-btn del" onclick="delDocumentoEmitido('${d.id}')" aria-label="Excluir">${IC.trash}</button>
       </div>`).join("")}
   </div>`;
@@ -3950,7 +3951,7 @@ function vFichaAnamnesesSection(p){
         ${a.status!=="pendente" && !a.temAssinatura?`<span class="pill p-faltou">Assinatura pendente</span>`:""}
         ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`:""}
         ${a.status!=="pendente" && !a.temAssinatura?`<button class="btn ghost sm" onclick="abrirColherAssinaturaAnamnese('${a.id}')">✍️ Colher assinatura</button>`:""}
-        ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Imprimir">${IC.print}</button>`:""}
+        ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Visualizar">${IC.eye}</button>`:""}
         <button class="icon-btn del" onclick="delAnamnese('${a.id}')" aria-label="Excluir" title="Excluir">${IC.trash}</button>
       </div>`).join("")}
   </div>`;
