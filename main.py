@@ -1539,7 +1539,7 @@ def delete_anamnese(aid: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # DOCUMENTOS EMITIDOS  (prescrição, atestado — com timbre e assinatura do profissional)
 # ══════════════════════════════════════════════════════════════════════════════
-DOCUMENTO_TIPOS_VALIDOS = {"prescricao", "atestado"}
+DOCUMENTO_TIPOS_VALIDOS = {"prescricao", "atestado", "recibo"}
 
 
 class DocumentoIn(BaseModel):
@@ -1554,6 +1554,12 @@ class DocumentoIn(BaseModel):
     dataAtendimento: str | None = None
     horaAtendimento: str = ""
     cid: str = ""
+    # recibo:
+    valor: int = 0  # centavos
+    descricao: str = ""
+    formaPagamento: str = ""
+    dataPagamento: str | None = None
+    lancamentoId: str | None = None  # opcional — vincula a um lançamento já existente do financeiro
 
 
 @app.post("/api/patients/{pid}/documentos", status_code=201)
@@ -1573,6 +1579,13 @@ def criar_documento(pid: str, data: DocumentoIn, request: Request):
                 raise HTTPException(422, "Adicione pelo menos um medicamento.")
         if data.tipo == "atestado" and not data.motivo.strip() and not data.dias:
             raise HTTPException(422, "Informe o motivo ou os dias de afastamento.")
+        if data.tipo == "recibo":
+            if data.valor <= 0:
+                raise HTTPException(422, "Informe um valor maior que zero.")
+            if data.lancamentoId:
+                lanc = db.get(Lancamento, data.lancamentoId)
+                if not lanc or lanc.clinicaId != quem.clinicaId or lanc.patientId != pid:
+                    raise HTTPException(404, "Lançamento não encontrado.")
         conteudo = data.model_dump(exclude={"profissionalId", "tipo"})
         d = DocumentoEmitido(
             id=_new_id(), clinicaId=quem.clinicaId, patientId=pid, profissionalId=data.profissionalId,
