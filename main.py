@@ -382,9 +382,10 @@ class UsuarioIn(BaseModel):
 def list_usuarios(request: Request):
     quem = _usuario_logado(request)
     with SessionLocal() as db:
-        q = db.query(Usuario)
-        if not quem.isSuperAdmin:
-            q = q.filter(Usuario.clinicaId == quem.clinicaId)
+        # Gerenciar equipe é sempre da PRÓPRIA clínica de quem está logado —
+        # inclusive pro superadmin da plataforma, que enxerga todas as clínicas
+        # na tela dedicada de Clínicas, não aqui misturado com sua própria equipe.
+        q = db.query(Usuario).filter(Usuario.clinicaId == quem.clinicaId)
         return [
             {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
             for u in q.order_by(Usuario.nome).all()
@@ -413,7 +414,7 @@ def update_usuario(uid: int, data: UsuarioIn, request: Request):
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         u = db.get(Usuario, uid)
-        if not u or (not quem.isSuperAdmin and u.clinicaId != quem.clinicaId):
+        if not u or u.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Usuário não encontrado")
         if not data.ativo and u.ativo:
             ativos = db.query(Usuario).filter(Usuario.ativo == True, Usuario.clinicaId == u.clinicaId).count()  # noqa: E712
@@ -451,6 +452,26 @@ def _exige_superadmin(request: Request) -> Usuario:
     if not quem.isSuperAdmin:
         raise HTTPException(403, "Só um administrador da plataforma pode alterar isso.")
     return quem
+
+
+@app.get("/api/clinicas")
+def list_clinicas(request: Request):
+    """Visão de plataforma pro superadmin: todas as clínicas cadastradas,
+    com contagem de usuários e pacientes de cada uma. Não usa _row() porque
+    Clinica tem campos sensíveis (chavePix etc.) que não devem sair aqui."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        rows = db.query(Clinica).order_by(Clinica.created_at.desc()).all()
+        result = []
+        for c in rows:
+            num_usuarios = db.query(Usuario).filter(Usuario.clinicaId == c.id).count()
+            num_pacientes = db.query(Paciente).filter(Paciente.clinicaId == c.id).count()
+            result.append({
+                "id": c.id, "nome": c.nome, "plano": c.plano, "ativa": c.ativa,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                "numUsuarios": num_usuarios, "numPacientes": num_pacientes,
+            })
+        return result
 
 
 @app.get("/api/plataforma")
