@@ -1285,7 +1285,7 @@ function vFinanceiro(C){
       </div>
       ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:vencido?`<span class="pill p-faltou">Vencido</span>`:`<span class="pill p-agendado">Em aberto</span>`}
       ${l.pagoEm
-        ? `<button class="btn ghost sm" onclick="estornarLanc('${l.id}')">Estornar</button>`
+        ? `<button class="btn ghost sm" onclick="estornarLanc('${l.id}')">Estornar</button><button class="icon-btn" onclick="abrirReciboForm('${l.patientId}','${l.id}')" title="Emitir recibo">🧾</button>`
         : `<button class="btn sm" style="background:var(--green)" onclick="openReceberForm('${l.id}')">Receber</button>`}
       <button class="icon-btn" onclick="openLancForm('${l.id}')" aria-label="Editar">${IC.pencil}</button>
       <button class="icon-btn del" onclick="delLanc('${l.id}')" aria-label="Excluir">${IC.trash}</button>
@@ -2849,16 +2849,23 @@ async function carregarThumbsAnexos(){
   // Carrega a miniatura só das imagens (PDF e outros mantêm o ícone da categoria)
   // e só das que ainda não estão no cache — evita repetir a assinatura da URL
   // toda vez que a tela é re-renderizada.
+  let carregouAlguma = false;
   for(const a of FICHA_ANEXOS){
     if(!a.mimeType || !a.mimeType.startsWith("image/")) continue;
     if(ANEXO_THUMB_CACHE[a.id]) continue;
     try{
       const r = await api("GET", `/anexos/${a.id}/url`);
       ANEXO_THUMB_CACHE[a.id] = r.url;
+      carregouAlguma = true;
       const el = document.getElementById(`thumb-${a.id}`);
       if(el) el.innerHTML = `<img src="${r.url}" style="width:100%;height:100%;object-fit:cover">`;
     }catch(e){ /* sem preview — mantém o ícone da categoria */ }
   }
+  // As grades de periapical/facial/elemento não têm um elemento próprio pra
+  // atualizar em tempo real (ao contrário da lista simples de Anexos acima) —
+  // um novo render() depois do cache preenchido é o jeito delas pegarem a
+  // miniatura, já que _renderGradeSlots só lê do ANEXO_THUMB_CACHE na hora.
+  if(carregouAlguma && TAB==="ficha") render();
 }
 function renomearAnexo(id){
   const a = FICHA_ANEXOS.find(x=>x.id===id);
@@ -3768,7 +3775,7 @@ const RECEITA_ATALHOS = [
   {medicamento:"Dexametasona 4mg", posologia:"1 comprimido, via oral, dose única"},
   {medicamento:"Clorexidina 0,12% (colutório)", posologia:"Bochechar 15ml por 30 segundos, 2x ao dia, por 7 dias"},
 ];
-const DOC_TIPO_LABEL = { prescricao:"Prescrição", atestado:"Atestado" };
+const DOC_TIPO_LABEL = { prescricao:"Prescrição", atestado:"Atestado", recibo:"Recibo" };
 
 function _presItemRow(it){
   it = it || {medicamento:"", posologia:""};
@@ -3864,6 +3871,61 @@ async function salvarAtestado(pid){
     <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
 }
 
+function _reciboLancamentosDoPaciente(pid){
+  return (DB.lancamentos||[]).filter(l=>l.patientId===pid && l.pagoEm).sort((a,b)=>b.pagoEm.localeCompare(a.pagoEm));
+}
+function abrirReciboForm(pid, lancId){
+  const p = pById(pid); if(!p) return;
+  const profs = DB.profissionais.filter(x=>x.ativo);
+  if(profs.length===0){ toast("Cadastre um profissional antes de emitir."); return; }
+  const pagos = _reciboLancamentosDoPaciente(pid);
+  const sel = lancId ? pagos.find(l=>l.id===lancId) : null;
+  modal(`Recibo — ${esc(p.name)}`, `
+    ${pagos.length?`<label class="f"><span>Baseado em pagamento (opcional)</span>
+      <select id="rec-lanc" onchange="_recAplicarLancSelecionado()">
+        <option value="">— Preencher manualmente —</option>
+        ${pagos.map(l=>`<option value="${l.id}" ${sel&&sel.id===l.id?"selected":""}>${fmtDate(l.pagoEm)} · ${esc(l.descricao||"Cobrança")} · ${fmtMoney(l.valor)}</option>`).join("")}
+      </select></label>`:""}
+    <label class="f"><span>Dentista/responsável</span><select id="rec-prof">${profs.map(x=>`<option value="${x.id}" ${CHAT_PROF_ID===x.id?"selected":""}>${esc(x.nome)}</option>`).join("")}</select></label>
+    <label class="f"><span>Valor (R$) *</span><input id="rec-valor" inputmode="decimal" value="${sel?(sel.valor/100).toFixed(2).replace(".",","):""}" placeholder="150,00"></label>
+    <label class="f"><span>Referente a</span><input id="rec-desc" value="${sel?esc(sel.descricao||""):""}" placeholder="Ex: Restauração 2MID"></label>
+    <div class="grid g2">
+      <label class="f"><span>Forma de pagamento</span><select id="rec-forma">${Object.entries(FORMAS_PGTO).map(([k,v])=>`<option value="${k}" ${sel&&sel.formaPagamento===k?"selected":""}>${v}</option>`).join("")}</select></label>
+      <label class="f"><span>Data do pagamento</span><input type="date" id="rec-data" value="${sel?sel.pagoEm:todayISO()}"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarRecibo('${pid}')">Emitir</button></div>`);
+}
+function _recAplicarLancSelecionado(){
+  const id = document.getElementById("rec-lanc").value;
+  const l = (DB.lancamentos||[]).find(x=>x.id===id);
+  if(!l) return;
+  document.getElementById("rec-valor").value = (l.valor/100).toFixed(2).replace(".",",");
+  document.getElementById("rec-desc").value = l.descricao||"";
+  document.getElementById("rec-forma").value = l.formaPagamento||"dinheiro";
+  document.getElementById("rec-data").value = l.pagoEm||todayISO();
+}
+async function salvarRecibo(pid){
+  const g=i=>document.getElementById(i)?.value||"";
+  const profissionalId = parseInt(g("rec-prof"));
+  const valor = parseMoney(g("rec-valor"));
+  if(valor<=0){ toast("Informe um valor válido."); return; }
+  const lancId = document.getElementById("rec-lanc")?.value || null;
+  let r;
+  try{
+    r = await api("POST", `/patients/${pid}/documentos`, {
+      tipo:"recibo", profissionalId, valor, descricao:g("rec-desc"),
+      formaPagamento:g("rec-forma"), dataPagamento:g("rec-data")||todayISO(), lancamentoId: lancId||null,
+    });
+  }catch(e){ return; }
+  closeModal();
+  if(TAB==="ficha" && FICHA_ID===pid){ FICHA_DOCUMENTOS = await api("GET", `/patients/${pid}/documentos`); render(); }
+  modal("Recibo emitido", `
+    <p style="font-size:14px;margin-bottom:16px">Recibo registrado. ✅</p>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+}
+
 function vFichaDocumentosSection(p){
   const list = FICHA_DOCUMENTOS || [];
   return `<div class="card" style="margin-bottom:12px">
@@ -3872,6 +3934,7 @@ function vFichaDocumentosSection(p){
       <div style="display:flex;gap:6px">
         <button class="btn ghost sm" onclick="abrirPrescricaoForm('${p.id}')">💊 Prescrição</button>
         <button class="btn ghost sm" onclick="abrirAtestadoForm('${p.id}')">📋 Atestado</button>
+        <button class="btn ghost sm" onclick="abrirReciboForm('${p.id}')">🧾 Recibo</button>
       </div>
     </div>
     ${list.length===0?`<div style="color:var(--soft);font-size:14px">Nenhum documento emitido ainda.</div>`:
@@ -3919,6 +3982,13 @@ async function imprimirDocumentoEmitido(id){
       </table>
       ${c.observacoes?`<p style="font-size:12.5px;margin-top:10px"><b>Observações:</b> ${esc(c.observacoes)}</p>`:""}
       ${assinaturaHTML}`;
+  } else if(d.tipo === "recibo"){
+    corpo = `
+      <h1>Recibo</h1>
+      <p style="font-size:14px;line-height:1.9;margin-top:20px">
+        Recebi de <b>${esc(d.patientName)}</b>${d.patientCpf?`, CPF ${esc(d.patientCpf)},`:""} a quantia de <b>${fmtMoney(c.valor||0)}</b>${c.descricao?`, referente a ${esc(c.descricao)}`:""}${c.formaPagamento?`, pago via ${esc(FORMAS_PGTO[c.formaPagamento]||c.formaPagamento)}`:""}${c.dataPagamento?`, em ${fmtDate(c.dataPagamento)}`:""}.
+      </p>
+      ${assinaturaHTML}`;
   } else {
     const dataFmt = c.dataAtendimento ? fmtDate(c.dataAtendimento) : fmtDate(todayISO());
     corpo = `
@@ -3930,7 +4000,8 @@ async function imprimirDocumentoEmitido(id){
       </p>
       ${assinaturaHTML}`;
   }
-  _abrirDocImpressao(win, `${d.tipo==="prescricao"?"Receituário":"Atestado"} - ${d.patientName}`, corpo);
+  const tituloDoc = d.tipo==="prescricao" ? "Receituário" : d.tipo==="recibo" ? "Recibo" : "Atestado";
+  _abrirDocImpressao(win, `${tituloDoc} - ${d.patientName}`, corpo);
 }
 
 /* ── histórico de anamneses na Ficha + impressão (remota ou presencial) ── */
