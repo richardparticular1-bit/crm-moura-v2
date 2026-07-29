@@ -28,7 +28,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
@@ -1160,6 +1160,21 @@ class AnamneseRespostasIn(BaseModel):
     respostasClinicas: dict[str, dict] = {}
     assinaturaDataUrl: str = ""  # rubrica do paciente, PNG em base64 — obrigatória
 
+    @field_validator("birth")
+    @classmethod
+    def _valida_birth(cls, v):
+        # Campo aceito como texto livre (rota pública, sem login) — precisa
+        # ser validado no formato ANTES de virar Paciente.birth ou entrar em
+        # qualquer HTML (modal de revisão, impressão), senão vira um vetor de
+        # XSS: alguém pode enviar direto pra API, sem passar pelo formulário
+        # com <input type="date">, que é o que hoje impede isso no navegador.
+        if not v:
+            return None
+        import re
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Data de nascimento inválida.")
+        return v
+
 
 class AnamneseRemotaCriarIn(BaseModel):
     modeloId: str
@@ -1346,6 +1361,19 @@ class AprovarAnamneseIn(BaseModel):
     respEmail: str = ""
     queixaPrincipal: str = ""
     respostasClinicas: dict[str, dict] = {}
+
+    @field_validator("birth")
+    @classmethod
+    def _valida_birth(cls, v):
+        # Mesma validação de AnamneseRespostasIn — essencial aqui também: este
+        # modelo é usado tanto pela revisão de anamnese remota quanto (via
+        # herança, em AnamnesePresencialIn) pelo preenchimento presencial.
+        if not v:
+            return None
+        import re
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise ValueError("Data de nascimento inválida.")
+        return v
 
 
 def _resumo_respostas_clinicas(perguntas: list[dict], respostas_clinicas: dict) -> tuple[str, str, str, list[str]]:
