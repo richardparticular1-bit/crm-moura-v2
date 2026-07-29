@@ -3600,7 +3600,7 @@ async function abrirRevisaoAnamnese(id){
     <label class="f"><span>Queixa principal</span><textarea id="ra-queixa" rows="3">${esc(r.queixaPrincipal||"")}</textarea></label>
     ${d.perguntas && d.perguntas.length ? `<div style="margin-bottom:12px">${d.perguntas.map(perguntaHTML).join("")}</div>` : ""}
     <div class="grid g2">
-      <label class="f"><span>Nascimento</span><input type="date" id="ra-birth" value="${r.birth||""}"></label>
+      <label class="f"><span>Nascimento</span><input type="date" id="ra-birth" value="${esc(r.birth||"")}"></label>
       <label class="f"><span>E-mail</span><input id="ra-email" value="${esc(r.email||"")}"></label>
     </div>
     <div class="grid g2">
@@ -4119,7 +4119,7 @@ async function imprimirAnamnesePreenchida(aid){
     <p style="font-size:13px;margin:0 0 12px"><b>Paciente:</b> ${esc(d.patientName)}${idade!==null?` &nbsp;·&nbsp; ${idade} anos`:""}</p>
     <table>
       <tbody>
-        <tr><td style="width:33%"><b>Nascimento</b><br>${r.birth?fmtDate(r.birth):"—"}</td><td style="width:33%"><b>CPF</b><br>${esc(r.cpf)||"—"}</td><td><b>RG</b><br>${esc(r.rg)||"—"} ${esc(r.orgaoExpedidor)||""}</td></tr>
+        <tr><td style="width:33%"><b>Nascimento</b><br>${r.birth?fmtDate(esc(r.birth)):"—"}</td><td style="width:33%"><b>CPF</b><br>${esc(r.cpf)||"—"}</td><td><b>RG</b><br>${esc(r.rg)||"—"} ${esc(r.orgaoExpedidor)||""}</td></tr>
         <tr><td><b>Naturalidade</b><br>${esc(r.naturalidade)||"—"}</td><td><b>Nacionalidade</b><br>${esc(r.nacionalidade)||"—"}</td><td><b>Estado civil</b><br>${esc(r.estadoCivil)||"—"}</td></tr>
         <tr><td><b>Profissão</b><br>${esc(r.profissao)||"—"}</td><td colspan="2"><b>Endereço</b><br>${esc(r.enderecoResidencial)||"—"}</td></tr>
       </tbody>
