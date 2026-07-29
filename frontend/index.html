@@ -217,6 +217,7 @@ const IC = {
   alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
   clip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>',
   eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+  building:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="4" y="2" width="16" height="20" rx="1"/><line x1="8" y1="6" x2="8" y2="6.01"/><line x1="12" y1="6" x2="12" y2="6.01"/><line x1="16" y1="6" x2="16" y2="6.01"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><path d="M9 22v-4h6v4"/></svg>',
 };
 
 /* ── estado global ── */
@@ -516,6 +517,7 @@ const NAV = [
   {id:"chat",label:"Chat",ic:IC.chat},
   {id:"profissionais",label:"Profissionais",ic:IC.prof},
   {id:"settings",label:"Ajustes",ic:IC.gear},
+  {id:"clinicas",label:"Clínicas",ic:IC.building,superadmin:true},
 ];
 
 function go(tab){
@@ -525,6 +527,7 @@ function go(tab){
     reloadChat();
     CHAT_POLL = setInterval(reloadChat, 5000);
   }
+  if(tab==="clinicas") carregarClinicasAdmin();
   render();
   window.scrollTo(0,0);
 }
@@ -532,12 +535,12 @@ function go(tab){
 /* ── render principal ── */
 function render(){
   const C = calc();
-  document.getElementById("nav").innerHTML = NAV.map(n=>{
+  document.getElementById("nav").innerHTML = NAV.filter(n=>!n.superadmin || AUTH_IS_SUPERADMIN).map(n=>{
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
   const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, gastos:vGastos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
-    retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota,
+    retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota, clinicas:vClinicas,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -3531,6 +3534,36 @@ async function _gerarLinkAnamnese(pid, nome, phone){
       <p class="meta" style="margin-top:6px">Ou peça pro paciente escanear o QR</p>
     </div>`:""}
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button></div>`;
+}
+
+/* ════════════════════════════════════════════
+   CLÍNICAS — visão de plataforma, só pro superadmin (dono do sistema).
+   Não é gestão de clínica nenhuma daqui — é só contagem/visão geral de
+   quantas clínicas usam o sistema, pra não precisar abrir o Supabase.
+════════════════════════════════════════════ */
+let CLINICAS_ADMIN = [];
+async function carregarClinicasAdmin(){
+  try{ CLINICAS_ADMIN = await api("GET", "/clinicas"); }
+  catch(e){ CLINICAS_ADMIN = []; }
+  if(TAB==="clinicas") render();
+}
+function vClinicas(){
+  const list = CLINICAS_ADMIN || [];
+  const ativas = list.filter(c=>c.ativa).length;
+  return `${header("Clínicas","Visão de plataforma — todas as clínicas que usam o sistema.")}
+  <div class="grid g3" style="margin-bottom:16px">
+    <div class="stat"><b>${list.length}</b><span>Clínicas cadastradas</span></div>
+    <div class="stat good"><b>${ativas}</b><span>Ativas</span></div>
+    <div class="stat"><b>${list.reduce((s,c)=>s+c.numPacientes,0)}</b><span>Pacientes no total</span></div>
+  </div>
+  ${list.length===0?empty("Nenhuma clínica cadastrada ainda."):
+  `<div class="card" style="padding:4px 16px">`+list.map(c=>`
+    <div class="row">
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(c.nome)} ${!c.ativa?'<span class="pill p-cancelado">Inativa</span>':""}</div>
+        <div class="meta">${esc(c.plano)||"—"} · desde ${fmtDate((c.created_at||"").slice(0,10))} · ${c.numUsuarios} usuário${c.numUsuarios===1?"":"s"} · ${c.numPacientes} paciente${c.numPacientes===1?"":"s"}</div>
+      </div>
+    </div>`).join("")+`</div>`}`;
 }
 
 function vAnamneseRemota(){
