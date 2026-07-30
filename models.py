@@ -147,6 +147,37 @@ class Clinica(Base):
     tipoChavePix: Mapped[str] = mapped_column(String(20), default="")  # cpf | cnpj | email | telefone | aleatoria
 
 
+class PlanoSaaS(Base):
+    """Plano de assinatura da PLATAFORMA — o que cada clínica paga pra usar o
+    OdontoDesk. Não confundir com o financeiro de dentro da clínica
+    (Lancamento), que é o que o PACIENTE paga pra clínica. Configurado só
+    pelo superadmin, na tela de Clínicas."""
+    __tablename__ = "planos_saas"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    nome: Mapped[str] = mapped_column(String(60))
+    valor: Mapped[int] = mapped_column(Integer, default=0)  # centavos, mensal
+    limitePacientes: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = ilimitado
+    limiteProfissionais: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = ilimitado
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class AssinaturaClinica(Base):
+    """Assinatura da PLATAFORMA de uma clínica — vincula a um PlanoSaaS e
+    acompanha o pagamento recorrente via Mercado Pago. bloqueadaManualmente
+    é a ÚNICA forma de suspender o acesso: atraso de pagamento só gera aviso
+    (pra clínica e pro superadmin), nunca bloqueio automático — quem decide
+    bloquear é sempre uma pessoa, na tela de Clínicas."""
+    __tablename__ = "assinaturas_clinica"
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"), primary_key=True)
+    planoId: Mapped[str | None] = mapped_column(String(20), ForeignKey("planos_saas.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="trial")  # trial | ativa | atrasada | cancelada
+    mpPreapprovalId: Mapped[str | None] = mapped_column(String(80), nullable=True)  # id da assinatura no Mercado Pago
+    proximoVencimento: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    bloqueadaManualmente: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class Plataforma(Base):
     """Marca neutra da plataforma (ex: OdontoDesk), exibida na tela de login
     ANTES do usuário se autenticar — quando o sistema ainda não sabe de qual
