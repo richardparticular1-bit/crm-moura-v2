@@ -32,7 +32,7 @@ from pydantic import BaseModel, field_validator
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, AssinaturaClinica, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, PlanoSaaS, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
 
@@ -55,6 +55,17 @@ VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
 APP_URL = os.environ.get("APP_URL", "https://crm-moura.onrender.com")
+
+# Cobrança recorrente da PLATAFORMA (assinatura de cada clínica), via Mercado
+# Pago Preapproval — só o Access Token da SUA conta Mercado Pago (a que recebe
+# o dinheiro das clínicas). Sem isso configurado, os endpoints de assinatura
+# continuam existindo mas devolvem erro claro em vez de derrubar o app.
+MERCADOPAGO_ACCESS_TOKEN = os.environ.get("MERCADOPAGO_ACCESS_TOKEN", "")
+
+
+def _mp_configurado():
+    if not MERCADOPAGO_ACCESS_TOKEN:
+        raise HTTPException(503, "Mercado Pago não configurado neste servidor: defina MERCADOPAGO_ACCESS_TOKEN no Render.")
 
 
 def _email_configurado():
@@ -124,7 +135,8 @@ def icon512():
 SESSAO_DIAS = 30
 AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
               "/api/signup", "/api/verify-email", "/api/resend-verification",
-              "/api/plataforma", "/api/portal", "/api/anamnese-publica")
+              "/api/plataforma", "/api/portal", "/api/anamnese-publica",
+              "/api/webhooks/mercadopago")
 
 
 def _hash_senha(senha: str) -> str:
@@ -200,6 +212,9 @@ def auth_setup(data: SetupIn):
         clinica = Clinica(nome=(data.clinicaNome.strip() or "Minha Clínica"), plano="ativo", ativa=True)
         db.add(clinica)
         db.flush()  # garante clinica.id antes de criar o usuário
+        # Clínica da plataforma (a do superadmin) não paga assinatura — fica
+        # registrada como "ativa" só pra aparecer coerente na tela de Clínicas.
+        db.add(AssinaturaClinica(clinicaId=clinica.id, status="ativa"))
         u = Usuario(
             clinicaId=clinica.id, nome=data.nome.strip(), email=data.email.strip().lower(),
             senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=True,
@@ -290,6 +305,7 @@ def signup(data: SignupIn):
         )
         db.add(clinica)
         db.flush()
+        db.add(AssinaturaClinica(clinicaId=clinica.id, status="trial"))
         token = secrets.token_urlsafe(32)
         u = Usuario(
             clinicaId=clinica.id, nome=data.nome.strip(), email=email,
@@ -367,6 +383,14 @@ def _usuario_logado(request: Request) -> Usuario:
         u = _usuario_do_token(db, token)
         if not u:
             raise HTTPException(401, "Não autenticado.")
+        if not u.isSuperAdmin:
+            # Único jeito de bloquear uma clínica é o superadmin marcar
+            # manualmente (tela de Clínicas) — atraso de pagamento sozinho
+            # nunca bloqueia, só gera aviso. Superadmin nunca é bloqueado
+            # por isso, pra nunca ficar trancado pra fora e poder desbloquear.
+            assinatura = db.get(AssinaturaClinica, u.clinicaId)
+            if assinatura and assinatura.bloqueadaManualmente:
+                raise HTTPException(403, "Acesso suspenso pela plataforma. Entre em contato com o suporte.")
         db.expunge(u)
         return u
 
@@ -457,8 +481,9 @@ def _exige_superadmin(request: Request) -> Usuario:
 @app.get("/api/clinicas")
 def list_clinicas(request: Request):
     """Visão de plataforma pro superadmin: todas as clínicas cadastradas,
-    com contagem de usuários e pacientes de cada uma. Não usa _row() porque
-    Clinica tem campos sensíveis (chavePix etc.) que não devem sair aqui."""
+    com contagem de usuários/pacientes e o status da assinatura de cada uma.
+    Não usa _row() porque Clinica tem campos sensíveis (chavePix etc.) que
+    não devem sair aqui."""
     _exige_superadmin(request)
     with SessionLocal() as db:
         rows = db.query(Clinica).order_by(Clinica.created_at.desc()).all()
@@ -466,12 +491,209 @@ def list_clinicas(request: Request):
         for c in rows:
             num_usuarios = db.query(Usuario).filter(Usuario.clinicaId == c.id).count()
             num_pacientes = db.query(Paciente).filter(Paciente.clinicaId == c.id).count()
+            assinatura = db.get(AssinaturaClinica, c.id)
+            plano_saas = db.get(PlanoSaaS, assinatura.planoId) if (assinatura and assinatura.planoId) else None
             result.append({
                 "id": c.id, "nome": c.nome, "plano": c.plano, "ativa": c.ativa,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "numUsuarios": num_usuarios, "numPacientes": num_pacientes,
+                "assinaturaStatus": assinatura.status if assinatura else "trial",
+                "planoSaasId": assinatura.planoId if assinatura else None,
+                "planoSaasNome": plano_saas.nome if plano_saas else None,
+                "proximoVencimento": assinatura.proximoVencimento if assinatura else None,
+                "bloqueadaManualmente": assinatura.bloqueadaManualmente if assinatura else False,
             })
         return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLANOS SAAS E ASSINATURA DA PLATAFORMA  (o que cada clínica paga pra usar o
+# sistema — cobrança recorrente via Mercado Pago; só o superadmin mexe aqui)
+# ══════════════════════════════════════════════════════════════════════════════
+class PlanoSaaSIn(BaseModel):
+    nome: str
+    valor: int  # centavos, mensal
+    limitePacientes: int | None = None
+    limiteProfissionais: int | None = None
+    ativo: bool = True
+
+
+@app.get("/api/planos-saas")
+def list_planos_saas(request: Request):
+    """Lista de planos — pública pra qualquer usuário logado, não só
+    superadmin, porque a própria clínica também precisa ver o nome/limite do
+    plano em que está (ex: no aviso de assinatura atrasada ou de limite)."""
+    _usuario_logado(request)
+    with SessionLocal() as db:
+        rows = db.query(PlanoSaaS).filter(PlanoSaaS.ativo == True).order_by(PlanoSaaS.valor.asc()).all()  # noqa: E712
+        return [_row(p) for p in rows]
+
+
+@app.post("/api/planos-saas", status_code=201)
+def create_plano_saas(data: PlanoSaaSIn, request: Request):
+    _exige_superadmin(request)
+    if data.valor < 0:
+        raise HTTPException(422, "Valor inválido.")
+    with SessionLocal() as db:
+        p = PlanoSaaS(id=_new_id(), **data.model_dump())
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        return _row(p)
+
+
+@app.put("/api/planos-saas/{pid}")
+def update_plano_saas(pid: str, data: PlanoSaaSIn, request: Request):
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        p = db.get(PlanoSaaS, pid)
+        if not p:
+            raise HTTPException(404, "Plano não encontrado.")
+        for k, v in data.model_dump().items():
+            setattr(p, k, v)
+        db.commit()
+        db.refresh(p)
+        return _row(p)
+
+
+class AtribuirPlanoIn(BaseModel):
+    planoId: str | None = None  # None = tira a clínica de qualquer plano (volta pro trial, sem cobrança)
+
+
+@app.put("/api/clinicas/{cid}/plano")
+def set_plano_clinica(cid: int, data: AtribuirPlanoIn, request: Request):
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        if data.planoId:
+            plano = db.get(PlanoSaaS, data.planoId)
+            if not plano:
+                raise HTTPException(404, "Plano não encontrado.")
+        a = db.get(AssinaturaClinica, cid)
+        if not a:
+            a = AssinaturaClinica(clinicaId=cid)
+            db.add(a)
+        a.planoId = data.planoId
+        if not data.planoId:
+            a.status = "trial"
+        db.commit()
+        return {"ok": True}
+
+
+class BloquearClinicaIn(BaseModel):
+    bloquear: bool
+
+
+@app.put("/api/clinicas/{cid}/bloquear")
+def bloquear_clinica(cid: int, data: BloquearClinicaIn, request: Request):
+    """Único jeito de suspender o acesso de uma clínica — sempre uma decisão
+    manual do superadmin, nunca automática por atraso de pagamento."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        a = db.get(AssinaturaClinica, cid)
+        if not a:
+            a = AssinaturaClinica(clinicaId=cid)
+            db.add(a)
+        a.bloqueadaManualmente = data.bloquear
+        db.commit()
+        return {"ok": True, "bloqueadaManualmente": a.bloqueadaManualmente}
+
+
+@app.get("/api/minha-assinatura")
+def get_minha_assinatura(request: Request):
+    """Pra qualquer usuário da clínica ver o status da PRÓPRIA assinatura —
+    usado pro aviso de atraso, nunca bloqueia nada por si só."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        a = db.get(AssinaturaClinica, quem.clinicaId)
+        plano = db.get(PlanoSaaS, a.planoId) if (a and a.planoId) else None
+        if not a:
+            return {"status": "trial", "planoNome": None, "proximoVencimento": None}
+        return {
+            "status": a.status, "planoNome": plano.nome if plano else None,
+            "proximoVencimento": a.proximoVencimento,
+        }
+
+
+def _mp_request(metodo: str, caminho: str, corpo: dict | None = None) -> dict:
+    r = requests.request(
+        metodo, f"https://api.mercadopago.com{caminho}",
+        headers={"Authorization": f"Bearer {MERCADOPAGO_ACCESS_TOKEN}", "Content-Type": "application/json"},
+        json=corpo, timeout=30,
+    )
+    if r.status_code >= 300:
+        raise HTTPException(502, f"Mercado Pago recusou a requisição ({r.status_code}): {r.text[:300]}")
+    return r.json()
+
+
+@app.post("/api/clinicas/{cid}/gerar-cobranca-mp", status_code=201)
+def gerar_cobranca_mp(cid: int, request: Request):
+    """Cria a assinatura recorrente no Mercado Pago (produto "Preapproval")
+    pro plano atual da clínica, e devolve o link de checkout — o superadmin
+    copia e manda pra clínica autorizar o pagamento recorrente (cartão).
+    Isso NÃO é cobrança via Pix: o Preapproval do Mercado Pago é sempre
+    cartão; Pix não tem cobrança recorrente nativa no Brasil."""
+    _exige_superadmin(request)
+    _mp_configurado()
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        a = db.get(AssinaturaClinica, cid)
+        if not a or not a.planoId:
+            raise HTTPException(409, "Defina um plano pra esta clínica antes de gerar a cobrança.")
+        plano = db.get(PlanoSaaS, a.planoId)
+        if not plano:
+            raise HTTPException(404, "Plano não encontrado.")
+        resp = _mp_request("POST", "/preapproval", {
+            "reason": f"Assinatura {plano.nome} — {c.nome}",
+            "auto_recurring": {
+                "frequency": 1, "frequency_type": "months",
+                "transaction_amount": round(plano.valor / 100, 2),
+                "currency_id": "BRL",
+            },
+            "back_url": APP_URL,
+            "payer_email": c.email or None,
+            "external_reference": str(cid),
+            "status": "pending",
+        })
+        a.mpPreapprovalId = resp.get("id")
+        db.commit()
+        return {"ok": True, "initPoint": resp.get("init_point"), "preapprovalId": resp.get("id")}
+
+
+@app.post("/api/webhooks/mercadopago")
+async def webhook_mercadopago(request: Request):
+    """Notificação do Mercado Pago sobre mudanças na assinatura (autorizada,
+    pagamento recebido, cancelada...). Rota pública — o Mercado Pago não
+    manda o Bearer token da sua conta, então a validação real é: só
+    atualizamos uma AssinaturaClinica cujo mpPreapprovalId bate com o que
+    veio na notificação. Configure esta URL (/api/webhooks/mercadopago) no
+    painel do Mercado Pago, em Webhooks, pro evento "subscription_preapproval"."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"ok": True}  # corpo inválido — apenas confirma recebimento, sem processar
+    preapproval_id = (payload.get("data") or {}).get("id") or payload.get("id")
+    if not preapproval_id or not MERCADOPAGO_ACCESS_TOKEN:
+        return {"ok": True}
+    try:
+        info = _mp_request("GET", f"/preapproval/{preapproval_id}")
+    except HTTPException:
+        return {"ok": True}  # não derruba o webhook por falha de consulta — Mercado Pago reenvia depois
+    status_mp = info.get("status")  # authorized | paused | cancelled | pending
+    mapa_status = {"authorized": "ativa", "paused": "atrasada", "cancelled": "cancelada", "pending": "trial"}
+    with SessionLocal() as db:
+        a = db.query(AssinaturaClinica).filter(AssinaturaClinica.mpPreapprovalId == preapproval_id).first()
+        if a:
+            a.status = mapa_status.get(status_mp, a.status)
+            db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/plataforma")
@@ -690,6 +912,14 @@ def _prof_da_clinica(db, prof_id: int | None, clinica_id: int) -> bool:
     return bool(prof and prof.clinicaId == clinica_id)
 
 
+def _plano_da_clinica(db, clinica_id: int) -> PlanoSaaS | None:
+    """Plano de assinatura ATUAL da clínica (o que ela paga pra usar o
+    sistema), ou None se não estiver em nenhum plano com limite (trial sem
+    plano atribuído = sem limite nenhum ainda)."""
+    a = db.get(AssinaturaClinica, clinica_id)
+    return db.get(PlanoSaaS, a.planoId) if (a and a.planoId) else None
+
+
 def _minutos(hhmm: str) -> int | None:
     """'14:30' → 870. Retorna None se o formato for inválido."""
     try:
@@ -753,6 +983,11 @@ def list_profissionais(request: Request):
 def create_profissional(data: ProfissionalIn, request: Request):
     quem = _usuario_logado(request)
     with SessionLocal() as db:
+        plano = _plano_da_clinica(db, quem.clinicaId)
+        if plano and plano.limiteProfissionais is not None:
+            total = db.query(Profissional).filter(Profissional.clinicaId == quem.clinicaId).count()
+            if total >= plano.limiteProfissionais:
+                raise HTTPException(403, f"Limite de {plano.limiteProfissionais} profissionais do plano {plano.nome} atingido. Fale com o suporte para fazer upgrade.")
         p = Profissional(**data.model_dump(), clinicaId=quem.clinicaId)
         db.add(p)
         db.commit()
@@ -847,6 +1082,11 @@ def create_patient(data: PacienteIn, request: Request):
         dup = _prontuario_duplicado(db, quem.clinicaId, data.numProntuario)
         if dup:
             raise HTTPException(409, f"Número de prontuário já usado por {dup.name}.")
+        plano = _plano_da_clinica(db, quem.clinicaId)
+        if plano and plano.limitePacientes is not None:
+            total = db.query(Paciente).filter(Paciente.clinicaId == quem.clinicaId).count()
+            if total >= plano.limitePacientes:
+                raise HTTPException(403, f"Limite de {plano.limitePacientes} pacientes do plano {plano.nome} atingido. Fale com o suporte para fazer upgrade.")
         p = Paciente(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=pid, clinicaId=quem.clinicaId)
         db.add(p)
         db.commit()
