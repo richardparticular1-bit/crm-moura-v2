@@ -335,15 +335,17 @@ async function carregarPlataforma(){
   }catch(e){ /* mantém o padrão "OdontoDesk" se a chamada falhar */ }
   return PLATAFORMA;
 }
+let MINHA_ASSINATURA = null;
 async function carregarMinhaClinica(){
   try{
-    const [me, c] = await Promise.all([ api("GET","/auth/me"), api("GET","/clinica") ]);
+    const [me, c, assin] = await Promise.all([ api("GET","/auth/me"), api("GET","/clinica"), api("GET","/minha-assinatura") ]);
     AUTH_IS_SUPERADMIN = !!me.isSuperAdmin;
     MINHA_CLINICA = {
       nome: c.nome || "", responsavelTecnico: c.responsavelTecnico || "", croResponsavel: c.croResponsavel || "",
       cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
       email: c.email || "", cidade: c.cidade || "", chavePix: c.chavePix || "", tipoChavePix: c.tipoChavePix || "", logoUrl: c.logoUrl || null,
     };
+    MINHA_ASSINATURA = assin;
     aplicarMarcaSidebar();
   }catch(e){ /* segue com os valores padrão se falhar */ }
 }
@@ -563,7 +565,16 @@ function vDash(C){
       </div>
       <button class="btn sm" style="background:#d97706" onclick="go('patients')">Ver parabéns</button>
     </div>` : "";
+  const assinBanner = (MINHA_ASSINATURA && (MINHA_ASSINATURA.status==="atrasada"||MINHA_ASSINATURA.status==="cancelada")) ? `
+    <div class="bday-banner" style="background:linear-gradient(135deg,#fee2e2,#fecaca);border-color:#fca5a5">
+      <div class="emoji">⚠️</div>
+      <div class="grow">
+        <div style="font-weight:700;font-size:14px;color:#7f1d1d">${MINHA_ASSINATURA.status==="cancelada"?"Assinatura cancelada":"Assinatura em atraso"}</div>
+        <div style="font-size:13px;color:#7f1d1d">Regularize o pagamento da plataforma pra continuar usando sem interrupções.${MINHA_ASSINATURA.planoNome?" Plano: "+esc(MINHA_ASSINATURA.planoNome)+".":""}</div>
+      </div>
+    </div>` : "";
   return `${header("Painel","Hoje, "+fmtDate(C.t))}
+  ${assinBanner}
   ${bdayBanner}
   <div class="grid g4" style="margin-bottom:16px">
     <button class="stat" onclick="go('patients')"><b>${DB.patients.length}</b><span>Pacientes</span></button>
@@ -3538,32 +3549,104 @@ async function _gerarLinkAnamnese(pid, nome, phone){
 
 /* ════════════════════════════════════════════
    CLÍNICAS — visão de plataforma, só pro superadmin (dono do sistema).
-   Não é gestão de clínica nenhuma daqui — é só contagem/visão geral de
-   quantas clínicas usam o sistema, pra não precisar abrir o Supabase.
+   Contagem geral de quem usa o sistema + gestão de planos SaaS e da
+   assinatura de cada clínica (plano, status, bloqueio manual, cobrança
+   recorrente via Mercado Pago).
 ════════════════════════════════════════════ */
 let CLINICAS_ADMIN = [];
+let PLANOS_SAAS = [];
 async function carregarClinicasAdmin(){
-  try{ CLINICAS_ADMIN = await api("GET", "/clinicas"); }
-  catch(e){ CLINICAS_ADMIN = []; }
+  try{
+    const [clin, planos] = await Promise.all([ api("GET", "/clinicas"), api("GET", "/planos-saas") ]);
+    CLINICAS_ADMIN = clin; PLANOS_SAAS = planos;
+  }catch(e){ CLINICAS_ADMIN = []; PLANOS_SAAS = []; }
   if(TAB==="clinicas") render();
 }
+const ASSIN_STATUS_LABEL = { trial:"Trial", ativa:"Em dia", atrasada:"Atrasada", cancelada:"Cancelada" };
+const ASSIN_STATUS_PILL = { trial:"p-cancelado", ativa:"p-concluido", atrasada:"p-faltou", cancelada:"p-cancelado" };
 function vClinicas(){
   const list = CLINICAS_ADMIN || [];
   const ativas = list.filter(c=>c.ativa).length;
-  return `${header("Clínicas","Visão de plataforma — todas as clínicas que usam o sistema.")}
+  return `${header("Clínicas","Visão de plataforma — todas as clínicas que usam o sistema.",`<button class="btn ghost" onclick="openPlanoSaasForm()">${IC.plus} Novo plano</button>`)}
   <div class="grid g3" style="margin-bottom:16px">
     <div class="stat"><b>${list.length}</b><span>Clínicas cadastradas</span></div>
     <div class="stat good"><b>${ativas}</b><span>Ativas</span></div>
     <div class="stat"><b>${list.reduce((s,c)=>s+c.numPacientes,0)}</b><span>Pacientes no total</span></div>
   </div>
+  ${PLANOS_SAAS.length?`<div class="card" style="margin-bottom:16px">
+    <h2>Planos SaaS</h2>
+    ${PLANOS_SAAS.map(p=>`<div class="row">
+      <div class="grow"><div style="font-weight:500;font-size:14px">${esc(p.nome)}</div>
+        <div class="meta">${fmtMoney(p.valor)}/mês · ${p.limitePacientes?p.limitePacientes+" pacientes":"pacientes ilimitados"} · ${p.limiteProfissionais?p.limiteProfissionais+" profissionais":"profissionais ilimitados"}</div></div>
+      <button class="icon-btn" onclick="openPlanoSaasForm('${p.id}')">${IC.pencil}</button>
+    </div>`).join("")}
+  </div>`:`<div class="card" style="margin-bottom:16px"><p class="meta">Nenhum plano criado ainda — crie um plano pra poder cobrar as clínicas.</p></div>`}
   ${list.length===0?empty("Nenhuma clínica cadastrada ainda."):
   `<div class="card" style="padding:4px 16px">`+list.map(c=>`
-    <div class="row">
+    <div class="row" style="flex-wrap:wrap">
       <div class="grow">
-        <div style="font-weight:500;font-size:14px">${esc(c.nome)} ${!c.ativa?'<span class="pill p-cancelado">Inativa</span>':""}</div>
-        <div class="meta">${esc(c.plano)||"—"} · desde ${fmtDate((c.created_at||"").slice(0,10))} · ${c.numUsuarios} usuário${c.numUsuarios===1?"":"s"} · ${c.numPacientes} paciente${c.numPacientes===1?"":"s"}</div>
+        <div style="font-weight:500;font-size:14px">${esc(c.nome)} ${!c.ativa?'<span class="pill p-cancelado">Inativa</span>':""} ${c.bloqueadaManualmente?'<span class="pill p-faltou">Bloqueada</span>':""}</div>
+        <div class="meta">desde ${fmtDate((c.created_at||"").slice(0,10))} · ${c.numUsuarios} usuário${c.numUsuarios===1?"":"s"} · ${c.numPacientes} paciente${c.numPacientes===1?"":"s"}</div>
       </div>
+      <span class="pill ${ASSIN_STATUS_PILL[c.assinaturaStatus]||"p-cancelado"}">${ASSIN_STATUS_LABEL[c.assinaturaStatus]||c.assinaturaStatus}</span>
+      <select style="width:auto;font-size:12px;padding:6px 8px" onchange="atribuirPlanoClinica(${c.id},this.value)">
+        <option value="">— Sem plano —</option>
+        ${PLANOS_SAAS.map(p=>`<option value="${p.id}" ${c.planoSaasId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}
+      </select>
+      ${c.planoSaasId?`<button class="btn ghost sm" onclick="gerarCobrancaMp(${c.id})">💳 Gerar cobrança</button>`:""}
+      <button class="btn ${c.bloqueadaManualmente?"":"ghost"} sm" style="${c.bloqueadaManualmente?"background:var(--rose)":""}" onclick="toggleBloqueioClinica(${c.id},${!c.bloqueadaManualmente})">${c.bloqueadaManualmente?"Desbloquear":"Bloquear"}</button>
     </div>`).join("")+`</div>`}`;
+}
+function openPlanoSaasForm(id){
+  const p = id ? PLANOS_SAAS.find(x=>x.id===id) : {nome:"",valor:0,limitePacientes:"",limiteProfissionais:"",ativo:true};
+  modal(id?"Editar plano":"Novo plano SaaS",`
+    <label class="f"><span>Nome *</span><input id="ps-nome" value="${esc(p.nome)}" placeholder="Ex: Básico, Pro"></label>
+    <label class="f"><span>Valor mensal (R$) *</span><input id="ps-valor" inputmode="decimal" value="${p.valor?(p.valor/100).toFixed(2).replace(".",","):""}" placeholder="99,00"></label>
+    <div class="grid g2">
+      <label class="f"><span>Limite de pacientes</span><input type="number" min="0" id="ps-lim-pac" value="${p.limitePacientes??""}" placeholder="Vazio = ilimitado"></label>
+      <label class="f"><span>Limite de profissionais</span><input type="number" min="0" id="ps-lim-prof" value="${p.limiteProfissionais??""}" placeholder="Vazio = ilimitado"></label>
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarPlanoSaas('${id||""}')">Salvar</button></div>`);
+}
+async function salvarPlanoSaas(id){
+  const g=i=>document.getElementById(i)?.value||"";
+  const nome = g("ps-nome").trim();
+  const valor = parseMoney(g("ps-valor"));
+  if(!nome){ toast("Informe o nome do plano."); return; }
+  if(valor<=0){ toast("Informe um valor válido."); return; }
+  const payload = {
+    nome, valor,
+    limitePacientes: g("ps-lim-pac")?parseInt(g("ps-lim-pac")):null,
+    limiteProfissionais: g("ps-lim-prof")?parseInt(g("ps-lim-prof")):null,
+    ativo: true,
+  };
+  if(id){ await api("PUT",`/planos-saas/${id}`,payload); } else { await api("POST","/planos-saas",payload); }
+  closeModal(); await carregarClinicasAdmin(); toast("Plano salvo.");
+}
+async function atribuirPlanoClinica(cid, planoId){
+  try{ await api("PUT", `/clinicas/${cid}/plano`, {planoId: planoId||null}); }
+  catch(e){ return; }
+  await carregarClinicasAdmin(); toast("Plano atualizado.");
+}
+async function toggleBloqueioClinica(cid, bloquear){
+  if(bloquear && !confirm("Bloquear o acesso desta clínica? Todos os usuários dela (exceto você) ficam sem conseguir entrar.")) return;
+  try{ await api("PUT", `/clinicas/${cid}/bloquear`, {bloquear}); }
+  catch(e){ return; }
+  await carregarClinicasAdmin(); toast(bloquear?"Clínica bloqueada.":"Clínica desbloqueada.");
+}
+async function gerarCobrancaMp(cid){
+  let r;
+  try{ r = await api("POST", `/clinicas/${cid}/gerar-cobranca-mp`); }
+  catch(e){ return; }
+  await carregarClinicasAdmin();
+  modal("Cobrança gerada", `
+    <p class="meta" style="margin-bottom:10px">Envie este link pra clínica autorizar o pagamento recorrente (cartão) no Mercado Pago.</p>
+    <label class="f"><span>Link de checkout</span><input value="${esc(r.initPoint||"")}" readonly onclick="this.select()"></label>
+    <div class="acts">
+      <button class="btn ghost" onclick="navigator.clipboard.writeText('${r.initPoint||""}').then(()=>toast('Link copiado.'))">${IC.upload} Copiar link</button>
+      <button class="btn ghost" onclick="closeModal()">Fechar</button>
+    </div>`);
 }
 
 function vAnamneseRemota(){
