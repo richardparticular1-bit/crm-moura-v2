@@ -4994,7 +4994,10 @@ function modal(title,body){
   const bg=document.createElement("div"); bg.className="modal-bg"; bg.id="modalBg";
   bg.innerHTML=`<div class="modal" onclick="event.stopPropagation()">
     <div class="modal-hd"><h2>${title}</h2><button class="icon-btn" onclick="closeModal()">${IC.x}</button></div>${body}</div>`;
-  bg.onclick=closeModal; document.body.appendChild(bg);
+  // Antes fechava ao tocar fora do modal — perigoso em formulário com dados
+  // digitados (um toque sem querer na borda apagava tudo). Agora só fecha
+  // pelo X ou por um botão explícito (Cancelar/Fechar) dentro do modal.
+  document.body.appendChild(bg);
 }
 function closeModal(){ document.getElementById("modalBg")?.remove(); }
 
