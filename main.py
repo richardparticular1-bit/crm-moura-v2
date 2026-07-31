@@ -650,6 +650,15 @@ def gerar_cobranca_mp(cid: int, request: Request):
         plano = db.get(PlanoSaaS, a.planoId)
         if not plano:
             raise HTTPException(404, "Plano não encontrado.")
+        # payer_email é obrigatório pro Mercado Pago — nem toda clínica
+        # preenche o e-mail institucional em Ajustes, então cai pro e-mail
+        # de algum usuário dela (sempre existe, é obrigatório no cadastro).
+        email_pagador = c.email.strip() if c.email else ""
+        if not email_pagador:
+            usuario_clinica = db.query(Usuario).filter(Usuario.clinicaId == cid, Usuario.ativo == True).order_by(Usuario.id.asc()).first()  # noqa: E712
+            email_pagador = usuario_clinica.email if usuario_clinica else ""
+        if not email_pagador:
+            raise HTTPException(422, "Esta clínica não tem nenhum e-mail cadastrado (nem no perfil, nem em nenhum usuário) — impossível gerar a cobrança sem isso.")
         resp = _mp_request("POST", "/preapproval", {
             "reason": f"Assinatura {plano.nome} — {c.nome}",
             "auto_recurring": {
@@ -658,7 +667,7 @@ def gerar_cobranca_mp(cid: int, request: Request):
                 "currency_id": "BRL",
             },
             "back_url": APP_URL,
-            "payer_email": c.email or None,
+            "payer_email": email_pagador,
             "external_reference": str(cid),
             "status": "pending",
         })
