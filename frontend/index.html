@@ -3594,6 +3594,7 @@ function vClinicas(){
         ${PLANOS_SAAS.map(p=>`<option value="${p.id}" ${c.planoSaasId===p.id?"selected":""}>${esc(p.nome)}</option>`).join("")}
       </select>
       ${c.planoSaasId?`<button class="btn ghost sm" onclick="gerarCobrancaMp(${c.id})">💳 Gerar cobrança</button>`:""}
+      ${c.numNaoVerificados?`<button class="btn ghost sm" onclick="confirmarEmailsClinica(${c.id})">✉️ Confirmar e-mail (${c.numNaoVerificados})</button>`:""}
       <button class="btn ${c.bloqueadaManualmente?"":"ghost"} sm" style="${c.bloqueadaManualmente?"background:var(--rose)":""}" onclick="toggleBloqueioClinica(${c.id},${!c.bloqueadaManualmente})">${c.bloqueadaManualmente?"Desbloquear":"Bloquear"}</button>
     </div>`).join("")+`</div>`}`;
 }
@@ -3634,6 +3635,14 @@ async function toggleBloqueioClinica(cid, bloquear){
   try{ await api("PUT", `/clinicas/${cid}/bloquear`, {bloquear}); }
   catch(e){ return; }
   await carregarClinicasAdmin(); toast(bloquear?"Clínica bloqueada.":"Clínica desbloqueada.");
+}
+async function confirmarEmailsClinica(cid){
+  if(!confirm("Confirmar manualmente o e-mail de todos os usuários pendentes desta clínica? Use isso se o e-mail de confirmação não chegou (ex: problema no envio pelo Resend).")) return;
+  let r;
+  try{ r = await api("POST", `/clinicas/${cid}/confirmar-emails`); }
+  catch(e){ return; }
+  await carregarClinicasAdmin();
+  toast(`${r.confirmados} usuário${r.confirmados===1?"":"s"} confirmado${r.confirmados===1?"":"s"}. Já pode fazer login.`);
 }
 async function gerarCobrancaMp(cid){
   let r;
