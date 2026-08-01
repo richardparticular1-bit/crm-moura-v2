@@ -4998,7 +4998,7 @@ async function showLogin(){
         <p class="meta" style="margin-bottom:14px">Crie o usuário administrador do sistema.</p>
         <label class="f"><span>Seu nome</span><input id="lg-nome" autocomplete="name"></label>` : `
         <h2 style="font-size:15px;margin-bottom:14px">Entrar</h2>`}
-      <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
+      <label class="f"><span>${setup?"E-mail":"Login"}</span><input id="lg-email" type="${setup?"email":"text"}" autocomplete="username" placeholder="${setup?"":"E-mail ou nome de usuário"}"></label>
       <label class="f"><span>Senha ${setup?"(mínimo 8 caracteres)":""}</span>
         <div style="position:relative">
           <input id="lg-senha" type="password" autocomplete="${setup?"new-password":"current-password"}" style="padding-right:38px" onkeydown="if(event.key==='Enter')authSubmit(${setup})">
@@ -5014,12 +5014,12 @@ async function showLogin(){
 }
 async function authSubmit(setup){
   const g=i=>document.getElementById(i)?.value;
-  const email=(g("lg-email")||"").trim(), senha=g("lg-senha")||"";
-  if(!email || !senha){ toast("Preencha e-mail e senha."); return; }
+  const login=(g("lg-email")||"").trim(), senha=g("lg-senha")||"";
+  if(!login || !senha){ toast(setup?"Preencha e-mail e senha.":"Preencha login e senha."); return; }
   try{
     const r = setup
-      ? await api("POST","/auth/setup",{nome:(g("lg-nome")||"").trim()||email.split("@")[0], email, senha})
-      : await api("POST","/auth/login",{email, senha});
+      ? await api("POST","/auth/setup",{nome:(g("lg-nome")||"").trim()||login.split("@")[0], email:login, senha})
+      : await api("POST","/auth/login",{login, senha});
     AUTH_TOKEN = r.token; AUTH_NOME = r.nome;
     localStorage.setItem("crm_token", AUTH_TOKEN);
     localStorage.setItem("crm_nome", AUTH_NOME);
@@ -5032,7 +5032,7 @@ async function authSubmit(setup){
     if(e.message && e.message.includes("Confirme seu e-mail")){
       const card = document.getElementById("login-card");
       if(card && !document.getElementById("lg-resend-link")){
-        card.insertAdjacentHTML("beforeend", `<p id="lg-resend-link" style="text-align:center;margin-top:10px;font-size:13px"><a href="#" onclick="resendVerification('${email.replace(/'/g,"")}');return false" style="color:var(--teal-700);font-weight:600">Reenviar e-mail de confirmação</a></p>`);
+        card.insertAdjacentHTML("beforeend", `<p id="lg-resend-link" style="text-align:center;margin-top:10px;font-size:13px"><a href="#" onclick="resendVerification('${login.replace(/'/g,"")}');return false" style="color:var(--teal-700);font-weight:600">Reenviar e-mail de confirmação</a></p>`);
       }
     }
   }
@@ -5087,19 +5087,20 @@ async function openUsuariosModal(){
         <div class="avatar">${initials(u.nome)}</div>
         <div class="grow">
           <div style="font-weight:500;font-size:14px">${esc(u.nome)} ${!u.ativo?'<span class="pill p-cancelado">Inativo</span>':""}</div>
-          <div class="meta">${esc(u.email)}</div>
+          <div class="meta">${esc(u.login)}</div>
         </div>
-        <button class="btn ghost sm" onclick="openUsuarioForm(${u.id},'${esc(u.nome)}','${esc(u.email)}',${u.ativo})">Editar</button>
+        <button class="btn ghost sm" onclick="openUsuarioForm(${u.id},'${esc(u.nome)}','${esc(u.login)}',${u.ativo})">Editar</button>
       </div>`).join("")}
     <div class="acts" style="justify-content:space-between;margin-top:12px">
       <button class="btn ghost" onclick="closeModal()">Fechar</button>
       <button class="btn" onclick="openUsuarioForm()">${IC.plus} Novo usuário</button>
     </div>`);
 }
-function openUsuarioForm(id, nome, email, ativo){
+function openUsuarioForm(id, nome, login, ativo){
   modal(id?"Editar usuário":"Novo usuário",`
     <label class="f"><span>Nome *</span><input id="u-nome" value="${nome||""}"></label>
-    <label class="f"><span>E-mail *</span><input id="u-email" type="email" value="${email||""}"></label>
+    <label class="f"><span>Login *</span><input id="u-login" value="${login||""}" placeholder="E-mail, ou só um nome de usuário (ex: maria)"></label>
+    <p class="meta" style="margin:-6px 0 11px">Pode ser o e-mail da pessoa, ou só um nome simples pra quem não usa e-mail no dia a dia — tipo "recepcao" ou o primeiro nome dela.</p>
     <label class="f"><span>${id?"Nova senha (deixe vazio para manter)":"Senha * (mínimo 8 caracteres)"}</span>
       <div style="position:relative">
         <input id="u-senha" type="password" autocomplete="new-password" style="padding-right:38px">
@@ -5113,11 +5114,11 @@ function openUsuarioForm(id, nome, email, ativo){
 async function saveUsuario(id){
   const g=i=>document.getElementById(i)?.value;
   const payload = {
-    nome:(g("u-nome")||"").trim(), email:(g("u-email")||"").trim(),
+    nome:(g("u-nome")||"").trim(), login:(g("u-login")||"").trim(),
     senha:g("u-senha")||null,
     ativo: id ? g("u-ativo")==="true" : true,
   };
-  if(!payload.nome || !payload.email){ toast("Preencha nome e e-mail."); return; }
+  if(!payload.nome || !payload.login){ toast("Preencha nome e login."); return; }
   if(id){ await api("PUT",`/usuarios/${id}`,payload); }
   else {
     if(!payload.senha){ toast("Defina uma senha para o novo usuário."); return; }
