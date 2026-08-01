@@ -1502,12 +1502,6 @@ def get_portal_paciente(token: str):
             .all()
         )
         total_aberto = sum(l.valor for l in lancs_abertos)
-        pix_copia_cola = None
-        if total_aberto > 0 and clinica and clinica.chavePix.strip():
-            pix_copia_cola = _gerar_pix_copia_cola(
-                clinica.chavePix, clinica.nome, clinica.cidade,
-                total_aberto, f"CRM{(p.numProntuario or p.id)[:10]}",
-            )
         return {
             "nome": p.name,
             "proximaConsulta": {
@@ -1522,10 +1516,45 @@ def get_portal_paciente(token: str):
             },
             "totalAberto": total_aberto,
             "lancamentosAbertos": [
-                {"descricao": l.descricao, "vencimento": l.vencimento, "valor": l.valor} for l in lancs_abertos
+                {"id": l.id, "descricao": l.descricao, "vencimento": l.vencimento, "valor": l.valor} for l in lancs_abertos
             ],
-            "pixCopiaCola": pix_copia_cola,
         }
+
+
+class PortalPixIn(BaseModel):
+    lancamentoIds: list[str]
+
+
+@app.post("/api/portal/{token}/pix")
+def gerar_pix_portal(token: str, data: PortalPixIn):
+    """Gera o Pix copia-e-cola só das parcelas que o PACIENTE escolheu pagar
+    agora — não precisa ser o total em aberto. Reconfere no banco que cada
+    uma ainda está sem pagoEm (evita gerar Pix de algo que a clínica já deu
+    baixa manualmente enquanto o paciente estava com a página aberta)."""
+    with SessionLocal() as db:
+        p = db.query(Paciente).filter(Paciente.tokenPortal == token).first()
+        if not p:
+            raise HTTPException(404, "Link inválido.")
+        ids = list(dict.fromkeys(data.lancamentoIds))  # remove duplicatas preservando ordem
+        if not ids:
+            raise HTTPException(422, "Selecione pelo menos uma cobrança.")
+        lancs = (
+            db.query(Lancamento)
+            .filter(Lancamento.id.in_(ids), Lancamento.patientId == p.id,
+                    Lancamento.clinicaId == p.clinicaId, Lancamento.pagoEm.is_(None))
+            .all()
+        )
+        if len(lancs) != len(ids):
+            raise HTTPException(409, "Uma ou mais cobranças selecionadas não existem mais ou já foram pagas — atualize a página.")
+        total = sum(l.valor for l in lancs)
+        clinica = db.get(Clinica, p.clinicaId)
+        if not clinica or not clinica.chavePix.strip():
+            raise HTTPException(503, "Esta clínica ainda não configurou a chave Pix.")
+        pix = _gerar_pix_copia_cola(
+            clinica.chavePix, clinica.nome, clinica.cidade,
+            total, f"CRM{(p.numProntuario or p.id)[:10]}",
+        )
+        return {"pixCopiaCola": pix, "valor": total}
 
 
 
