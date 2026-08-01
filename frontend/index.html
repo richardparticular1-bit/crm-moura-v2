@@ -218,6 +218,7 @@ const IC = {
   clip:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>',
   eye:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
   building:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="4" y="2" width="16" height="20" rx="1"/><line x1="8" y1="6" x2="8" y2="6.01"/><line x1="12" y1="6" x2="12" y2="6.01"/><line x1="16" y1="6" x2="16" y2="6.01"/><line x1="8" y1="10" x2="8" y2="10.01"/><line x1="12" y1="10" x2="12" y2="10.01"/><line x1="16" y1="10" x2="16" y2="10.01"/><line x1="8" y1="14" x2="8" y2="14.01"/><line x1="12" y1="14" x2="12" y2="14.01"/><line x1="16" y1="14" x2="16" y2="14.01"/><path d="M9 22v-4h6v4"/></svg>',
+  feedback:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="13" y2="14"/></svg>',
 };
 
 /* ── estado global ── */
@@ -520,6 +521,7 @@ const NAV = [
   {id:"profissionais",label:"Profissionais",ic:IC.prof},
   {id:"settings",label:"Ajustes",ic:IC.gear},
   {id:"clinicas",label:"Clínicas",ic:IC.building,superadmin:true},
+  {id:"feedback",label:"Feedback",ic:IC.feedback,superadmin:true},
 ];
 
 function go(tab){
@@ -530,6 +532,8 @@ function go(tab){
     CHAT_POLL = setInterval(reloadChat, 5000);
   }
   if(tab==="clinicas") carregarClinicasAdmin();
+  if(tab==="settings") carregarMeuFeedback();
+  if(tab==="feedback") carregarFeedbackAdmin();
   render();
   window.scrollTo(0,0);
 }
@@ -542,7 +546,7 @@ function render(){
     return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
   const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, gastos:vGastos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
-    retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota, clinicas:vClinicas,
+    retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota, clinicas:vClinicas, feedback:vFeedbackAdmin,
     survey:vSurvey, review:vReview, tarefas:vTarefas, chat:vChat, profissionais:vProfissionais, settings:vSettings };
   document.getElementById("main").innerHTML = views[TAB](C);
   if(TAB==="chat") setupChatUI();
@@ -3554,6 +3558,74 @@ async function _gerarLinkAnamnese(pid, nome, phone){
    recorrente via Mercado Pago).
 ════════════════════════════════════════════ */
 let CLINICAS_ADMIN = [];
+let MEU_FEEDBACK = [];
+let FEEDBACK_ADMIN = [];
+const FEEDBACK_CAT_LABEL = { bug:"🐞 Bug", sugestao:"💡 Sugestão", duvida:"❓ Dúvida", outro:"Outro" };
+const FEEDBACK_STATUS_LABEL = { aberto:"Aberto", respondido:"Respondido", fechado:"Fechado" };
+const FEEDBACK_STATUS_PILL = { aberto:"p-agendado", respondido:"p-concluido", fechado:"p-cancelado" };
+async function carregarMeuFeedback(){
+  try{ MEU_FEEDBACK = await api("GET", "/feedback"); }catch(e){ MEU_FEEDBACK = []; }
+  if(TAB==="settings") render();
+}
+function abrirFeedbackForm(){
+  modal("Enviar feedback", `
+    <label class="f"><span>Categoria</span><select id="fb-cat">${Object.entries(FEEDBACK_CAT_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join("")}</select></label>
+    <label class="f"><span>Título</span><input id="fb-titulo" placeholder="Resuma em poucas palavras"></label>
+    <label class="f"><span>Mensagem</span><textarea id="fb-msg" rows="4" placeholder="Descreva com detalhes"></textarea></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarFeedback()">Enviar</button></div>`);
+}
+async function salvarFeedback(){
+  const g=i=>document.getElementById(i)?.value||"";
+  const titulo = g("fb-titulo").trim(), mensagem = g("fb-msg").trim();
+  if(!titulo || !mensagem){ toast("Preencha título e mensagem."); return; }
+  try{ await api("POST", "/feedback", {categoria:g("fb-cat"), titulo, mensagem}); }
+  catch(e){ return; }
+  closeModal(); await carregarMeuFeedback(); toast("Feedback enviado. Obrigado! 🙏");
+}
+async function carregarFeedbackAdmin(){
+  try{ FEEDBACK_ADMIN = await api("GET", "/feedback-admin"); }catch(e){ FEEDBACK_ADMIN = []; }
+  if(TAB==="feedback") render();
+}
+function vFeedbackAdmin(){
+  const list = FEEDBACK_ADMIN || [];
+  const abertos = list.filter(f=>f.status==="aberto").length;
+  return `${header("Feedback",`${list.length} recebido${list.length===1?"":"s"} · ${abertos} em aberto`)}
+  ${list.length===0?empty("Nenhum feedback recebido ainda."):
+  `<div class="card" style="padding:4px 16px">`+list.map(f=>`
+    <div class="row" style="align-items:flex-start">
+      <div class="grow">
+        <div style="font-weight:500;font-size:14px">${esc(f.titulo)} <span class="pill" style="background:#f1f5f9;color:#334155;border-color:var(--line)">${FEEDBACK_CAT_LABEL[f.categoria]||f.categoria}</span></div>
+        <div class="meta">${esc(f.mensagem)}</div>
+        <div class="meta">${esc(f.clinicaNome)} · ${esc(f.autorNome)} · ${esc(f.autorEmail)}${f.clinicaWhatsapp?" · "+esc(f.clinicaWhatsapp):""} · ${fmtDateTime(f.created_at)}</div>
+        ${f.resposta?`<div style="margin-top:6px;padding:8px 10px;background:var(--teal-100);border-radius:8px;font-size:13px"><b>Sua resposta:</b> ${esc(f.resposta)}</div>`:""}
+      </div>
+      <span class="pill ${FEEDBACK_STATUS_PILL[f.status]||"p-cancelado"}">${FEEDBACK_STATUS_LABEL[f.status]||f.status}</span>
+      <button class="btn ghost sm" onclick="abrirResponderFeedback('${f.id}')">Responder</button>
+    </div>`).join("")+`</div>`}`;
+}
+function abrirResponderFeedback(id){
+  const f = FEEDBACK_ADMIN.find(x=>x.id===id); if(!f) return;
+  modal(`Responder — ${esc(f.titulo)}`, `
+    <p style="font-size:13.5px;margin-bottom:4px"><b>${esc(f.clinicaNome)}</b> · ${esc(f.autorNome)}</p>
+    <p class="meta" style="margin-bottom:12px">${esc(f.autorEmail)}${f.clinicaWhatsapp?" · "+esc(f.clinicaWhatsapp):""}</p>
+    <p style="font-size:13.5px;margin-bottom:12px;white-space:pre-wrap">${esc(f.mensagem)}</p>
+    <label class="f"><span>Resposta</span><textarea id="fb-resp" rows="3">${esc(f.resposta||"")}</textarea></label>
+    <label class="f"><span>Status</span><select id="fb-status">
+      <option value="aberto" ${f.status==="aberto"?"selected":""}>Aberto</option>
+      <option value="respondido" ${f.status==="respondido"?"selected":""}>Respondido</option>
+      <option value="fechado" ${f.status==="fechado"?"selected":""}>Fechado</option>
+    </select></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn" onclick="salvarRespostaFeedback('${id}')">Salvar</button></div>`);
+}
+async function salvarRespostaFeedback(id){
+  const resposta = document.getElementById("fb-resp")?.value||"";
+  const status = document.getElementById("fb-status")?.value||"respondido";
+  try{ await api("PUT", `/feedback-admin/${id}`, {resposta, status}); }
+  catch(e){ return; }
+  closeModal(); await carregarFeedbackAdmin(); toast("Resposta salva.");
+}
 let PLANOS_SAAS = [];
 async function carregarClinicasAdmin(){
   try{
@@ -3587,6 +3659,7 @@ function vClinicas(){
       <div class="grow">
         <div style="font-weight:500;font-size:14px">${esc(c.nome)} ${!c.ativa?'<span class="pill p-cancelado">Inativa</span>':""} ${c.bloqueadaManualmente?'<span class="pill p-faltou">Bloqueada</span>':""}</div>
         <div class="meta">desde ${fmtDate((c.created_at||"").slice(0,10))} · ${c.numUsuarios} usuário${c.numUsuarios===1?"":"s"} · ${c.numPacientes} paciente${c.numPacientes===1?"":"s"}</div>
+        <div class="meta">${c.email?esc(c.email):"sem e-mail"}${c.telefoneWhatsapp?" · "+esc(c.telefoneWhatsapp):" · sem WhatsApp"}</div>
       </div>
       <span class="pill ${ASSIN_STATUS_PILL[c.assinaturaStatus]||"p-cancelado"}">${ASSIN_STATUS_LABEL[c.assinaturaStatus]||c.assinaturaStatus}</span>
       <select style="width:auto;font-size:12px;padding:6px 8px" onchange="atribuirPlanoClinica(${c.id},this.value)">
@@ -4557,6 +4630,24 @@ function vSettings(){
       <button class="btn danger-link sm" onclick="logout()">Sair</button>
     </div>
   </div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+      <h2 style="margin:0">Feedback e Suporte 💬</h2>
+      <button class="btn ghost sm" onclick="abrirFeedbackForm()">${IC.plus} Enviar feedback</button>
+    </div>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:10px">Encontrou um bug, tem uma sugestão ou dúvida? Manda aqui.</p>
+    ${MEU_FEEDBACK.length===0?`<div style="color:var(--soft);font-size:13.5px">Nenhum feedback enviado ainda.</div>`:
+      MEU_FEEDBACK.map(f=>`
+      <div class="row" style="align-items:flex-start">
+        <div class="grow">
+          <div style="font-weight:500;font-size:14px">${esc(f.titulo)} <span class="pill" style="background:#f1f5f9;color:#334155;border-color:var(--line)">${FEEDBACK_CAT_LABEL[f.categoria]||f.categoria}</span></div>
+          <div class="meta">${esc(f.mensagem)}</div>
+          <div class="meta">${esc(f.autorNome)} · ${fmtDateTime(f.created_at)}</div>
+          ${f.resposta?`<div style="margin-top:6px;padding:8px 10px;background:var(--teal-100);border-radius:8px;font-size:13px"><b>Resposta:</b> ${esc(f.resposta)}</div>`:""}
+        </div>
+        <span class="pill ${FEEDBACK_STATUS_PILL[f.status]||"p-cancelado"}">${FEEDBACK_STATUS_LABEL[f.status]||f.status}</span>
+      </div>`).join("")}
+  </div>
   <div class="card" style="margin-bottom:12px"><h2>Perfil do Consultório 🏥</h2>
     <p style="font-size:13px;color:var(--mut);margin-bottom:12px">Aparece no menu lateral e em documentos impressos, como a anamnese.</p>
     <div class="row" style="border:none;padding:0 0 12px">
@@ -4842,6 +4933,8 @@ async function showLogin(){
       <label class="f"><span>Nome da clínica</span><input id="lg-clinica" autocomplete="organization"></label>
       <label class="f"><span>Seu nome</span><input id="lg-nome" autocomplete="name"></label>
       <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
+      <label class="f"><span>WhatsApp *</span><input id="lg-whatsapp" placeholder="(42) 99999-9999"></label>
+      <p class="meta" style="margin:-6px 0 11px">É o contato que o suporte da plataforma usa pra falar com você.</p>
       <label class="f"><span>Senha (mínimo 8 caracteres)</span><input id="lg-senha" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')signupSubmit()"></label>
       <details style="margin:12px 0 4px">
         <summary style="cursor:pointer;font-size:13px;color:var(--teal-700);font-weight:600">Dados legais do consultório (opcional — dá pra completar depois)</summary>
@@ -4852,10 +4945,7 @@ async function showLogin(){
             <label class="f"><span>CNPJ</span><input id="lg-cnpj"></label>
           </div>
           <label class="f"><span>Endereço completo</span><input id="lg-endereco"></label>
-          <div class="grid g2">
-            <label class="f"><span>WhatsApp</span><input id="lg-whatsapp"></label>
-            <label class="f"><span>E-mail da clínica</span><input id="lg-email-clinica" type="email"></label>
-          </div>
+          <label class="f"><span>E-mail da clínica</span><input id="lg-email-clinica" type="email"></label>
         </div>
       </details>
       <button class="btn" style="width:100%;justify-content:center;margin-top:6px" onclick="signupSubmit()">Criar minha clínica</button>
@@ -4907,7 +4997,9 @@ async function signupSubmit(){
   const g=i=>document.getElementById(i)?.value;
   const clinicaNome=(g("lg-clinica")||"").trim(), nome=(g("lg-nome")||"").trim();
   const email=(g("lg-email")||"").trim(), senha=g("lg-senha")||"";
-  if(!clinicaNome || !nome || !email || !senha){ toast("Preencha todos os campos."); return; }
+  const whatsapp=(g("lg-whatsapp")||"").trim();
+  if(!clinicaNome || !nome || !email || !senha || !whatsapp){ toast("Preencha todos os campos, incluindo o WhatsApp."); return; }
+  if(digits(whatsapp).length<10){ toast("Informe um WhatsApp válido."); return; }
   if(senha.length<8){ toast("A senha precisa de pelo menos 8 caracteres."); return; }
   try{
     await api("POST","/signup",{
@@ -4916,7 +5008,7 @@ async function signupSubmit(){
       croResponsavel: (g("lg-cro")||"").trim(),
       cnpj: (g("lg-cnpj")||"").trim(),
       enderecoCompleto: (g("lg-endereco")||"").trim(),
-      telefoneWhatsapp: (g("lg-whatsapp")||"").trim(),
+      telefoneWhatsapp: whatsapp,
       emailClinica: (g("lg-email-clinica")||"").trim(),
     });
     const card = document.getElementById("login-card");
