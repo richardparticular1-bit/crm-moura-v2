@@ -98,7 +98,7 @@ label.f span{display:block;font-size:12px;font-weight:600;color:#475569;margin-b
 .score-grid button:hover{background:var(--teal-100);border-color:var(--teal-300)}
 .note{font-weight:700;font-size:13px;padding:4px 12px;border-radius:99px}
 .note.hi{background:var(--green-bg);color:var(--green)}.note.mid{background:var(--amber-bg);color:var(--amber)}.note.lo{background:var(--rose-bg);color:var(--rose)}
-.toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:13px;padding:9px 16px;border-radius:99px;z-index:60;opacity:0;transition:opacity .25s;pointer-events:none;max-width:92vw;text-align:center}
+.toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;font-size:13px;padding:9px 16px;border-radius:99px;z-index:200;opacity:0;transition:opacity .25s;pointer-events:none;max-width:92vw;text-align:center}
 @media(min-width:768px){.toast{bottom:24px}}
 .toast.show{opacity:1}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px}
@@ -4969,7 +4969,12 @@ async function showLogin(){
       <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
       <label class="f"><span>WhatsApp *</span><input id="lg-whatsapp" placeholder="(42) 99999-9999"></label>
       <p class="meta" style="margin:-6px 0 11px">É o contato que o suporte da plataforma usa pra falar com você.</p>
-      <label class="f"><span>Senha (mínimo 8 caracteres)</span><input id="lg-senha" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')signupSubmit()"></label>
+      <label class="f"><span>Senha (mínimo 8 caracteres)</span>
+        <div style="position:relative">
+          <input id="lg-senha" type="password" autocomplete="new-password" style="padding-right:38px" onkeydown="if(event.key==='Enter')signupSubmit()">
+          <button type="button" onclick="toggleSenhaVisibility('lg-senha',this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:4px;color:var(--soft)" aria-label="Mostrar senha" title="Mostrar senha">${IC.eye}</button>
+        </div>
+      </label>
       <details style="margin:12px 0 4px">
         <summary style="cursor:pointer;font-size:13px;color:var(--teal-700);font-weight:600">Dados legais do consultório (opcional — dá pra completar depois)</summary>
         <div style="margin-top:10px">
@@ -4994,7 +4999,12 @@ async function showLogin(){
         <label class="f"><span>Seu nome</span><input id="lg-nome" autocomplete="name"></label>` : `
         <h2 style="font-size:15px;margin-bottom:14px">Entrar</h2>`}
       <label class="f"><span>E-mail</span><input id="lg-email" type="email" autocomplete="username"></label>
-      <label class="f"><span>Senha ${setup?"(mínimo 8 caracteres)":""}</span><input id="lg-senha" type="password" autocomplete="${setup?"new-password":"current-password"}" onkeydown="if(event.key==='Enter')authSubmit(${setup})"></label>
+      <label class="f"><span>Senha ${setup?"(mínimo 8 caracteres)":""}</span>
+        <div style="position:relative">
+          <input id="lg-senha" type="password" autocomplete="${setup?"new-password":"current-password"}" style="padding-right:38px" onkeydown="if(event.key==='Enter')authSubmit(${setup})">
+          <button type="button" onclick="toggleSenhaVisibility('lg-senha',this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:4px;color:var(--soft)" aria-label="Mostrar senha" title="Mostrar senha">${IC.eye}</button>
+        </div>
+      </label>
       <button class="btn" style="width:100%;justify-content:center;margin-top:6px" onclick="authSubmit(${setup})">${setup?"Criar e entrar":"Entrar"}</button>
       ${setup?"":`<p style="text-align:center;margin-top:14px;font-size:13px"><a href="#" onclick="LOGIN_MODE='signup';showLogin();return false" style="color:var(--teal-700);font-weight:600">Cadastrar uma clínica nova</a></p>`}
     </div>`;
@@ -5090,7 +5100,12 @@ function openUsuarioForm(id, nome, email, ativo){
   modal(id?"Editar usuário":"Novo usuário",`
     <label class="f"><span>Nome *</span><input id="u-nome" value="${nome||""}"></label>
     <label class="f"><span>E-mail *</span><input id="u-email" type="email" value="${email||""}"></label>
-    <label class="f"><span>${id?"Nova senha (deixe vazio para manter)":"Senha * (mínimo 8 caracteres)"}</span><input id="u-senha" type="password" autocomplete="new-password"></label>
+    <label class="f"><span>${id?"Nova senha (deixe vazio para manter)":"Senha * (mínimo 8 caracteres)"}</span>
+      <div style="position:relative">
+        <input id="u-senha" type="password" autocomplete="new-password" style="padding-right:38px">
+        <button type="button" onclick="toggleSenhaVisibility('u-senha',this)" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:4px;color:var(--soft)" aria-label="Mostrar senha" title="Mostrar senha">${IC.eye}</button>
+      </div>
+    </label>
     ${id?`<label class="f"><span>Status</span><select id="u-ativo"><option value="true" ${ativo?"selected":""}>Ativo</option><option value="false" ${!ativo?"selected":""}>Inativo</option></select></label>`:""}
     <div class="acts"><button class="btn ghost" onclick="openUsuariosModal()">Voltar</button>
     <button class="btn" onclick="saveUsuario(${id||0})">Salvar</button></div>`);
@@ -5135,6 +5150,12 @@ function modal(title,body){
   document.body.appendChild(bg);
 }
 function closeModal(){ document.getElementById("modalBg")?.remove(); }
+function toggleSenhaVisibility(id, btn){
+  const inp = document.getElementById(id);
+  if(!inp) return;
+  inp.type = inp.type === "password" ? "text" : "password";
+  btn.style.color = inp.type === "text" ? "var(--teal-700)" : "var(--soft)";
+}
 
 if("serviceWorker" in navigator){
   window.addEventListener("load",()=>{
