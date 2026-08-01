@@ -5210,11 +5210,15 @@ async function renderPortalPaciente(token){
     ${d.totalAberto>0 ? `
     <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:16px;margin-bottom:12px">
       <div style="font-size:12px;color:#9a3412;margin-bottom:4px">Valores em aberto</div>
-      <div style="font-size:22px;font-weight:700;color:#9a3412;margin-bottom:8px">${money(d.totalAberto)}</div>
-      ${d.lancamentosAbertos.map(l=>`<div style="font-size:12.5px;color:#7c2d12;display:flex;justify-content:space-between;gap:8px;padding:3px 0">
-        <span>${esc(l.descricao||"Cobrança")} — venc. ${brDate(l.vencimento)}</span><span style="white-space:nowrap">${money(l.valor)}</span>
-      </div>`).join("")}
-      ${d.pixCopiaCola ? `<button id="btn-copy-pix" data-pix="${esc(d.pixCopiaCola)}" style="width:100%;margin-top:10px;padding:11px;background:#0f766e;color:#fff;border:none;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer">Copiar código Pix</button>` : ""}
+      <div style="font-size:22px;font-weight:700;color:#9a3412;margin-bottom:2px" id="portal-valor-selecionado">${money(d.totalAberto)}</div>
+      <div style="font-size:11px;color:#9a3412;margin-bottom:10px">Marque abaixo o que você quer pagar agora — por padrão, tudo vem selecionado.</div>
+      ${d.lancamentosAbertos.map(l=>`<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#7c2d12;padding:5px 0;cursor:pointer">
+        <input type="checkbox" class="portal-lanc-chk" data-id="${l.id}" data-valor="${l.valor}" checked style="width:auto" onchange="_portalAtualizarSelecao()">
+        <span style="flex:1">${esc(l.descricao||"Cobrança")} — venc. ${brDate(l.vencimento)}</span>
+        <span style="white-space:nowrap">${money(l.valor)}</span>
+      </label>`).join("")}
+      <button id="btn-copy-pix" style="width:100%;margin-top:10px;padding:11px;background:#0f766e;color:#fff;border:none;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer">Gerar e copiar código Pix</button>
+      <p id="portal-pix-erro" style="font-size:11.5px;color:#b91c1c;margin-top:6px;display:none"></p>
     </div>` : `
     <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-bottom:12px;text-align:center;color:#166534;font-weight:600;font-size:14px">✓ Sem pendências financeiras</div>
     `}
@@ -5224,10 +5228,37 @@ async function renderPortalPaciente(token){
     </div>
     ${waNum ? `<a href="https://wa.me/55${waNum}" target="_blank" style="display:block;text-align:center;padding:13px;background:#16a34a;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px">💬 Falar com a clínica no WhatsApp</a>` : ""}
   `;
+  window._portalAtualizarSelecao = function(){
+    const marcados = Array.from(document.querySelectorAll(".portal-lanc-chk:checked"));
+    const soma = marcados.reduce((s,el)=>s+parseInt(el.dataset.valor,10),0);
+    const el = document.getElementById("portal-valor-selecionado");
+    if(el) el.textContent = money(soma);
+    const btn = document.getElementById("btn-copy-pix");
+    if(btn) btn.disabled = marcados.length===0;
+  };
   const btnPix = document.getElementById("btn-copy-pix");
   if(btnPix) btnPix.addEventListener("click", async () => {
-    try{ await navigator.clipboard.writeText(btnPix.dataset.pix); btnPix.textContent = "Copiado! ✓"; }
-    catch(e){ btnPix.textContent = "Não foi possível copiar"; }
+    const erroEl = document.getElementById("portal-pix-erro");
+    if(erroEl) erroEl.style.display = "none";
+    const ids = Array.from(document.querySelectorAll(".portal-lanc-chk:checked")).map(el=>el.dataset.id);
+    if(ids.length===0) return;
+    const textoOriginal = btnPix.textContent;
+    btnPix.disabled = true; btnPix.textContent = "Gerando…";
+    try{
+      const r = await fetch(API + "/portal/" + encodeURIComponent(token) + "/pix", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({lancamentoIds: ids}),
+      });
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.detail || "Não foi possível gerar o Pix.");
+      await navigator.clipboard.writeText(j.pixCopiaCola);
+      btnPix.textContent = "Copiado! ✓";
+    }catch(e){
+      btnPix.textContent = textoOriginal;
+      if(erroEl){ erroEl.textContent = e.message || "Não foi possível gerar o Pix. Atualize a página e tente de novo."; erroEl.style.display = "block"; }
+    }finally{
+      btnPix.disabled = false;
+    }
   });
 }
 
