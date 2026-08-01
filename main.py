@@ -491,12 +491,14 @@ def list_clinicas(request: Request):
         for c in rows:
             num_usuarios = db.query(Usuario).filter(Usuario.clinicaId == c.id).count()
             num_pacientes = db.query(Paciente).filter(Paciente.clinicaId == c.id).count()
+            num_nao_verificados = db.query(Usuario).filter(Usuario.clinicaId == c.id, Usuario.emailVerificado == False).count()  # noqa: E712
             assinatura = db.get(AssinaturaClinica, c.id)
             plano_saas = db.get(PlanoSaaS, assinatura.planoId) if (assinatura and assinatura.planoId) else None
             result.append({
                 "id": c.id, "nome": c.nome, "plano": c.plano, "ativa": c.ativa,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "numUsuarios": num_usuarios, "numPacientes": num_pacientes,
+                "numNaoVerificados": num_nao_verificados,
                 "assinaturaStatus": assinatura.status if assinatura else "trial",
                 "planoSaasId": assinatura.planoId if assinatura else None,
                 "planoSaasNome": plano_saas.nome if plano_saas else None,
@@ -516,6 +518,27 @@ class PlanoSaaSIn(BaseModel):
     limitePacientes: int | None = None
     limiteProfissionais: int | None = None
     ativo: bool = True
+
+
+@app.post("/api/clinicas/{cid}/confirmar-emails")
+def confirmar_emails_clinica(cid: int, request: Request):
+    """Confirma manualmente o e-mail de todos os usuários pendentes dessa
+    clínica — usado quando o envio de e-mail (Resend) falha ou não está
+    configurado corretamente (ex: domínio de envio não verificado, o que
+    faz o Resend recusar silenciosamente e-mails pra qualquer destinatário
+    que não seja o dono da conta), pra ninguém ficar travado por causa
+    disso."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        usuarios = db.query(Usuario).filter(Usuario.clinicaId == cid, Usuario.emailVerificado == False).all()  # noqa: E712
+        for u in usuarios:
+            u.emailVerificado = True
+            u.emailVerifyToken = None
+        db.commit()
+        return {"ok": True, "confirmados": len(usuarios)}
 
 
 @app.get("/api/planos-saas")
