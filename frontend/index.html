@@ -3669,6 +3669,8 @@ function vClinicas(){
       ${c.planoSaasId?`<button class="btn ghost sm" onclick="gerarCobrancaMp(${c.id})">💳 Gerar cobrança</button>`:""}
       ${c.numNaoVerificados?`<button class="btn ghost sm" onclick="confirmarEmailsClinica(${c.id})">✉️ Confirmar e-mail (${c.numNaoVerificados})</button>`:""}
       <button class="btn ${c.bloqueadaManualmente?"":"ghost"} sm" style="${c.bloqueadaManualmente?"background:var(--rose)":""}" onclick="toggleBloqueioClinica(${c.id},${!c.bloqueadaManualmente})">${c.bloqueadaManualmente?"Desbloquear":"Bloquear"}</button>
+      <button class="btn ghost sm" onclick="toggleAtivaClinica(${c.id},${!c.ativa},'${esc(c.nome)}')">${c.ativa?"Marcar inativa":"Marcar ativa"}</button>
+      ${!c.ativa?`<button class="icon-btn del" onclick="abrirExcluirClinica(${c.id},'${esc(c.nome)}')" title="Excluir clínica e todos os dados">${IC.trash}</button>`:""}
     </div>`).join("")+`</div>`}`;
 }
 function openPlanoSaasForm(id){
@@ -3708,6 +3710,38 @@ async function toggleBloqueioClinica(cid, bloquear){
   try{ await api("PUT", `/clinicas/${cid}/bloquear`, {bloquear}); }
   catch(e){ return; }
   await carregarClinicasAdmin(); toast(bloquear?"Clínica bloqueada.":"Clínica desbloqueada.");
+}
+async function toggleAtivaClinica(cid, ativa, nome){
+  if(!ativa && !confirm(`Marcar "${nome}" como inativa? Isso não apaga nada, só habilita o botão de exclusão definitiva.`)) return;
+  try{ await api("PUT", `/clinicas/${cid}/ativa`, {ativa}); }
+  catch(e){ return; }
+  await carregarClinicasAdmin(); toast(ativa?"Clínica marcada como ativa.":"Clínica marcada como inativa.");
+}
+function abrirExcluirClinica(cid, nome){
+  modal("⚠️ Excluir clínica definitivamente", `
+    <p style="font-size:13.5px;margin-bottom:10px">Isso apaga <b>permanentemente</b> todos os dados de <b>${esc(nome)}</b>: pacientes, consultas, financeiro, prontuário, orçamentos, anamneses, documentos e arquivos. <b>Não tem como desfazer.</b></p>
+    <p style="font-size:13.5px;margin-bottom:10px">Um backup completo é baixado automaticamente assim que você confirmar — é a última chance de recuperar algo depois disso.</p>
+    <label class="f"><span>Digite <b>${esc(nome)}</b> pra confirmar</span><input id="excl-clinica-confirma" placeholder="${esc(nome)}"></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn danger" onclick="confirmarExcluirClinica(${cid},'${esc(nome)}')">Excluir definitivamente</button></div>`);
+}
+async function confirmarExcluirClinica(cid, nome){
+  const digitado = document.getElementById("excl-clinica-confirma")?.value||"";
+  if(digitado.trim() !== nome){ toast("O nome digitado não confere. Nada foi excluído."); return; }
+  let r;
+  try{ r = await api("DELETE", `/clinicas/${cid}`); }
+  catch(e){ return; }
+  closeModal();
+  if(r && r.dump){
+    const blob = new Blob([JSON.stringify(r.dump,null,2)],{type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `backup-antes-exclusao-${nome.replace(/[^a-z0-9]+/gi,"-")}-${todayISO()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  await carregarClinicasAdmin();
+  toast(`Clínica "${nome}" excluída. Backup baixado.`);
 }
 async function confirmarEmailsClinica(cid){
   if(!confirm("Confirmar manualmente o e-mail de todos os usuários pendentes desta clínica? Use isso se o e-mail de confirmação não chegou (ex: problema no envio pelo Resend).")) return;
