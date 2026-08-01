@@ -734,6 +734,120 @@ def bloquear_clinica(cid: int, data: BloquearClinicaIn, request: Request):
         return {"ok": True, "bloqueadaManualmente": a.bloqueadaManualmente}
 
 
+class AtivarClinicaIn(BaseModel):
+    ativa: bool
+
+
+@app.put("/api/clinicas/{cid}/ativa")
+def set_ativa_clinica(cid: int, data: AtivarClinicaIn, request: Request):
+    """Marca a clínica como ativa/inativa. É um rótulo administrativo (não
+    bloqueia acesso sozinho — pra isso existe o bloqueio manual acima) mas é
+    o PRÉ-REQUISITO pra poder excluir os dados dela depois: só se exclui
+    clínica já marcada como inativa, de propósito, pra evitar apagar uma
+    clínica em uso por engano."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        c.ativa = data.ativa
+        db.commit()
+        return {"ok": True, "ativa": c.ativa}
+
+
+def _sb_list_recursivo(prefixo: str, profundidade: int = 4) -> list[str]:
+    """Lista TODOS os arquivos (não pastas) sob um prefixo, descendo em
+    subpastas recursivamente — o list padrão do Supabase Storage só lista um
+    nível por vez (como pastas de um S3); pastas vêm com id=None."""
+    if profundidade <= 0:
+        return []
+    r = requests.post(
+        f"{SUPABASE_URL}/storage/v1/object/list/{ANEXO_BUCKET}",
+        headers=_sb_headers("application/json"),
+        json={"prefix": prefixo, "limit": 1000, "sortBy": {"column": "name", "order": "asc"}},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        return []
+    arquivos = []
+    for item in r.json():
+        nome = item.get("name")
+        if not nome:
+            continue
+        caminho = f"{prefixo.rstrip('/')}/{nome}" if prefixo else nome
+        if item.get("id") is None and item.get("metadata") is None:
+            arquivos.extend(_sb_list_recursivo(caminho + "/", profundidade - 1))
+        else:
+            arquivos.append(caminho)
+    return arquivos
+
+
+def _apagar_storage_da_clinica(cid: int):
+    """Apaga (melhor esforço — nunca derruba a exclusão por causa disso)
+    todos os arquivos da clínica no Storage: anexos, fotos, assinaturas,
+    consentimentos, comprovantes de despesa, logo e backups."""
+    prefixos_com_pasta = [
+        f"{cid}/", f"_fotos/{cid}/", f"_despesas/{cid}/", f"_assinaturas/{cid}/",
+        f"_assinaturas_anamnese/{cid}/", f"_consentimentos/{cid}/",
+        f"_consentimentos_orcamento/{cid}/", f"_backups/{cid}/",
+    ]
+    for prefixo in prefixos_com_pasta:
+        try:
+            for caminho in _sb_list_recursivo(prefixo):
+                _sb_delete(caminho)
+        except Exception:
+            pass  # limpeza de storage é melhor-esforço; a exclusão do banco já aconteceu
+    try:
+        _sb_delete(f"_logos/{cid}.png")
+    except Exception:
+        pass
+
+
+@app.delete("/api/clinicas/{cid}")
+def excluir_clinica(cid: int, request: Request):
+    """Exclusão DEFINITIVA de uma clínica e TODOS os dados dela — pacientes,
+    consultas, financeiro, prontuário, arquivos, tudo. Irreversível. Só
+    funciona se a clínica já estiver marcada como inativa (trava contra
+    exclusão por engano de uma clínica em uso). Devolve um dump completo dos
+    dados ANTES de apagar, pro frontend oferecer download imediato — a
+    última chance de recuperar algo depois desse ponto."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, cid)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        if c.ativa:
+            raise HTTPException(409, "Marque a clínica como inativa antes de excluir — é a trava de segurança contra exclusão por engano.")
+
+        dump = _dump_data(db, cid)  # snapshot final, devolvido pro superadmin baixar
+
+        # Ordem importa: quem referencia (FK real) precisa sumir antes de quem é referenciado.
+        db.query(OrcamentoItem).filter(OrcamentoItem.clinicaId == cid).delete(synchronize_session=False)
+        db.query(ConsentimentoOrcamento).filter(ConsentimentoOrcamento.clinicaId == cid).delete(synchronize_session=False)
+        db.query(Orcamento).filter(Orcamento.clinicaId == cid).delete(synchronize_session=False)
+        db.query(AnamnesePergunta).filter(AnamnesePergunta.clinicaId == cid).delete(synchronize_session=False)
+        db.query(AnamneseRemota).filter(AnamneseRemota.clinicaId == cid).delete(synchronize_session=False)
+        db.query(AnamneseModelo).filter(AnamneseModelo.clinicaId == cid).delete(synchronize_session=False)
+        ids_usuarios = [u.id for u in db.query(Usuario.id).filter(Usuario.clinicaId == cid).all()]
+        if ids_usuarios:
+            db.query(Sessao).filter(Sessao.usuarioId.in_(ids_usuarios)).delete(synchronize_session=False)
+        db.query(Usuario).filter(Usuario.clinicaId == cid).delete(synchronize_session=False)
+        # Tabelas que referenciam profissionais.id — precisam sumir antes do Profissional
+        for Modelo in (Consulta, Tarefa, Lancamento, Evolucao, OdontogramaMarca, ConsentimentoMidia,
+                       DocumentoEmitido, MensagemChat, PushSubscription):
+            db.query(Modelo).filter(Modelo.clinicaId == cid).delete(synchronize_session=False)
+        db.query(Profissional).filter(Profissional.clinicaId == cid).delete(synchronize_session=False)
+        # Resto das tabelas simples, sem mais nada referenciando elas
+        for Modelo in (Paciente, Pesquisa, Anexo, RetornoConfig, Despesa, FeedbackSAC,
+                       NotificacaoEnviada, Config, AssinaturaClinica):
+            db.query(Modelo).filter(Modelo.clinicaId == cid).delete(synchronize_session=False)
+        db.delete(c)
+        db.commit()
+
+    _apagar_storage_da_clinica(cid)
+    return {"ok": True, "dump": dump}
+
+
 @app.get("/api/minha-assinatura")
 def get_minha_assinatura(request: Request):
     """Pra qualquer usuário da clínica ver o status da PRÓPRIA assinatura —
