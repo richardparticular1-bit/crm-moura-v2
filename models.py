@@ -300,12 +300,18 @@ class OrcamentoItem(Base):
 
 
 class Usuario(Base):
-    """Usuário do sistema. Senha SEMPRE armazenada como hash bcrypt."""
+    """Usuário do sistema. Senha SEMPRE armazenada como hash bcrypt.
+    Login pode ser por e-mail OU por username — a conta que se cadastra
+    sozinha (signup público) sempre usa e-mail de verdade, porque precisa
+    confirmar por e-mail; membros de equipe adicionados por um admin já
+    logado (Gerenciar equipe) podem usar só um nome de usuário simples,
+    sem precisar de um e-mail de verdade."""
     __tablename__ = "usuarios"
     clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     nome: Mapped[str] = mapped_column(String(150))
-    email: Mapped[str] = mapped_column(String(120), unique=True)
+    email: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(60), unique=True, nullable=True)
     senhaHash: Mapped[str] = mapped_column(String(100))
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
