@@ -30,6 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from pywebpush import webpush, WebPushException
+from sqlalchemy import or_
 
 from database import SessionLocal, init_db
 from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, AssinaturaClinica, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, FeedbackSAC, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, PlanoSaaS, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
@@ -180,7 +181,7 @@ class SetupIn(BaseModel):
 
 
 class LoginIn(BaseModel):
-    email: str
+    login: str  # e-mail OU nome de usuário — auth_login tenta os dois
     senha: str
 
 
@@ -226,35 +227,38 @@ def auth_setup(data: SetupIn):
         return {"token": token, "nome": u.nome}
 
 
-# Rate limiting do login: 5 tentativas erradas bloqueiam o e-mail por 15 minutos.
+# Rate limiting do login: 5 tentativas erradas bloqueiam o login por 15 minutos.
 # Em memória (reinicia com o deploy) — suficiente para barrar força bruta casual.
-LOGIN_FALHAS: dict[str, list] = {}  # email -> [tentativas, bloqueado_ate_epoch]
+LOGIN_FALHAS: dict[str, list] = {}  # login -> [tentativas, bloqueado_ate_epoch]
 LOGIN_MAX_TENTATIVAS = 5
 LOGIN_BLOQUEIO_SEG = 15 * 60
 
 
 @app.post("/api/auth/login")
 def auth_login(data: LoginIn):
-    email = data.email.strip().lower()
+    login_norm = data.login.strip().lower()
     agora = time.time()
-    reg = LOGIN_FALHAS.get(email)
+    reg = LOGIN_FALHAS.get(login_norm)
     if reg and reg[1] > agora:
         restam = int((reg[1] - agora) // 60) + 1
         raise HTTPException(429, f"Muitas tentativas. Tente novamente em {restam} min.")
     with SessionLocal() as db:
-        u = db.query(Usuario).filter(Usuario.email == email).first()
+        # Login por e-mail OU por nome de usuário — a mesma caixa de texto
+        # serve pros dois, o backend descobre qual é comparando com ambas
+        # as colunas (cada uma já é única no sistema todo).
+        u = db.query(Usuario).filter(or_(Usuario.email == login_norm, Usuario.username == login_norm)).first()
         if not u or not _verifica_senha(data.senha, u.senhaHash):
-            reg = LOGIN_FALHAS.setdefault(email, [0, 0])
+            reg = LOGIN_FALHAS.setdefault(login_norm, [0, 0])
             reg[0] += 1
             if reg[0] >= LOGIN_MAX_TENTATIVAS:
                 reg[1] = agora + LOGIN_BLOQUEIO_SEG
                 reg[0] = 0
-            raise HTTPException(401, "E-mail ou senha incorretos.")
+            raise HTTPException(401, "Login ou senha incorretos.")
         if not u.ativo:
             raise HTTPException(403, "Usuário desativado. Fale com o administrador.")
         if not u.emailVerificado:
             raise HTTPException(403, "Confirme seu e-mail antes de entrar. Verifique sua caixa de entrada.")
-        LOGIN_FALHAS.pop(email, None)
+        LOGIN_FALHAS.pop(login_norm, None)
         token = _criar_sessao(db, u)
         return {"token": token, "nome": u.nome}
 
@@ -400,9 +404,20 @@ def _usuario_logado(request: Request) -> Usuario:
 
 class UsuarioIn(BaseModel):
     nome: str
-    email: str
+    login: str  # e-mail (se tiver "@") ou nome de usuário simples — a mesma caixa serve pros dois
     senha: str | None = None  # obrigatória ao criar; opcional ao editar (troca)
     ativo: bool = True
+
+
+def _parse_login(login: str) -> tuple[str | None, str | None]:
+    """Decide se o texto digitado em Gerenciar equipe é um e-mail ou vira um
+    nome de usuário simples — só o formato decide, sem exigir escolha manual.
+    '@' no meio = e-mail; senão, username (minúsculo, sem espaços)."""
+    import re
+    valor = (login or "").strip()
+    if "@" in valor:
+        return valor.lower(), None
+    return None, re.sub(r"\s+", "", valor).lower()
 
 
 @app.get("/api/usuarios")
@@ -414,7 +429,7 @@ def list_usuarios(request: Request):
         # na tela dedicada de Clínicas, não aqui misturado com sua própria equipe.
         q = db.query(Usuario).filter(Usuario.clinicaId == quem.clinicaId)
         return [
-            {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
+            {"id": u.id, "nome": u.nome, "login": u.email or u.username or "", "ativo": u.ativo}
             for u in q.order_by(Usuario.nome).all()
         ]
 
@@ -424,16 +439,21 @@ def create_usuario(data: UsuarioIn, request: Request):
     quem = _usuario_logado(request)
     if not data.senha or len(data.senha) < 8:
         raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
+    email, username = _parse_login(data.login)
+    if not email and (not username or len(username) < 3):
+        raise HTTPException(422, "Informe um e-mail válido ou um nome de usuário com pelo menos 3 caracteres.")
     with SessionLocal() as db:
-        if db.query(Usuario).filter(Usuario.email == data.email.strip().lower()).first():
+        if email and db.query(Usuario).filter(Usuario.email == email).first():
             raise HTTPException(409, "Já existe um usuário com este e-mail.")
+        if username and db.query(Usuario).filter(Usuario.username == username).first():
+            raise HTTPException(409, "Já existe um usuário com este nome de usuário.")
         # clinicaId nunca vem do cliente — sempre herda de quem está criando, evitando
         # que alguém se atribua (ou atribua outra pessoa) a uma clínica que não é a sua.
-        u = Usuario(clinicaId=quem.clinicaId, nome=data.nome.strip(), email=data.email.strip().lower(),
+        u = Usuario(clinicaId=quem.clinicaId, nome=data.nome.strip(), email=email, username=username,
                     senhaHash=_hash_senha(data.senha), ativo=data.ativo)
         db.add(u)
         db.commit()
-        return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
+        return {"id": u.id, "nome": u.nome, "login": u.email or u.username or "", "ativo": u.ativo}
 
 
 @app.put("/api/usuarios/{uid}")
@@ -447,12 +467,20 @@ def update_usuario(uid: int, data: UsuarioIn, request: Request):
             ativos = db.query(Usuario).filter(Usuario.ativo == True, Usuario.clinicaId == u.clinicaId).count()  # noqa: E712
             if ativos <= 1:
                 raise HTTPException(409, "Não é possível desativar o último usuário ativo.")
-        novo_email = data.email.strip().lower()
-        existente = db.query(Usuario).filter(Usuario.email == novo_email, Usuario.id != uid).first()
-        if existente:
-            raise HTTPException(409, "Já existe um usuário com este e-mail.")
+        email, username = _parse_login(data.login)
+        if not email and (not username or len(username) < 3):
+            raise HTTPException(422, "Informe um e-mail válido ou um nome de usuário com pelo menos 3 caracteres.")
+        if email:
+            existente = db.query(Usuario).filter(Usuario.email == email, Usuario.id != uid).first()
+            if existente:
+                raise HTTPException(409, "Já existe um usuário com este e-mail.")
+        if username:
+            existente = db.query(Usuario).filter(Usuario.username == username, Usuario.id != uid).first()
+            if existente:
+                raise HTTPException(409, "Já existe um usuário com este nome de usuário.")
         u.nome = data.nome.strip()
-        u.email = novo_email
+        u.email = email
+        u.username = username
         u.ativo = data.ativo
         if data.senha:
             if len(data.senha) < 8:
@@ -460,7 +488,7 @@ def update_usuario(uid: int, data: UsuarioIn, request: Request):
             u.senhaHash = _hash_senha(data.senha)
             db.query(Sessao).filter(Sessao.usuarioId == uid).delete()  # troca de senha derruba sessões
         db.commit()
-        return {"id": u.id, "nome": u.nome, "email": u.email, "ativo": u.ativo}
+        return {"id": u.id, "nome": u.nome, "login": u.email or u.username or "", "ativo": u.ativo}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -618,7 +646,7 @@ def list_feedback_admin(request: Request):
                 "status": f.status, "resposta": f.resposta,
                 "clinicaNome": clinica.nome if clinica else "—",
                 "autorNome": autor.nome if autor else "—",
-                "autorEmail": autor.email if autor else "",
+                "autorEmail": (autor.email or autor.username or "") if autor else "",
                 "clinicaWhatsapp": clinica.telefoneWhatsapp if clinica else "",
                 "created_at": f.created_at.isoformat() if f.created_at else None,
                 "respondidoEm": f.respondidoEm.isoformat() if f.respondidoEm else None,
