@@ -32,7 +32,7 @@ from pydantic import BaseModel, field_validator
 from pywebpush import webpush, WebPushException
 
 from database import SessionLocal, init_db
-from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, AssinaturaClinica, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, PlanoSaaS, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
+from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, AssinaturaClinica, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, FeedbackSAC, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, PlanoSaaS, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
 
@@ -293,6 +293,9 @@ def signup(data: SignupIn):
         raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
     if not data.clinicaNome.strip():
         raise HTTPException(422, "Informe o nome da clínica.")
+    import re
+    if len(re.sub(r"\D", "", data.telefoneWhatsapp)) < 10:
+        raise HTTPException(422, "Informe um WhatsApp válido — é o contato usado pelo suporte da plataforma.")
     email = data.email.strip().lower()
     with SessionLocal() as db:
         if db.query(Usuario).filter(Usuario.email == email).first():
@@ -496,6 +499,7 @@ def list_clinicas(request: Request):
             plano_saas = db.get(PlanoSaaS, assinatura.planoId) if (assinatura and assinatura.planoId) else None
             result.append({
                 "id": c.id, "nome": c.nome, "plano": c.plano, "ativa": c.ativa,
+                "email": c.email, "telefoneWhatsapp": c.telefoneWhatsapp,
                 "created_at": c.created_at.isoformat() if c.created_at else None,
                 "numUsuarios": num_usuarios, "numPacientes": num_pacientes,
                 "numNaoVerificados": num_nao_verificados,
@@ -539,6 +543,109 @@ def confirmar_emails_clinica(cid: int, request: Request):
             u.emailVerifyToken = None
         db.commit()
         return {"ok": True, "confirmados": len(usuarios)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SAC / FEEDBACK  (qualquer usuário de clínica envia; só o superadmin vê tudo
+# e responde. Sem aviso automático fora do app — Richard confere quando quiser
+# na tela de Feedback.)
+# ══════════════════════════════════════════════════════════════════════════════
+FEEDBACK_CATEGORIAS_VALIDAS = {"bug", "sugestao", "duvida", "outro"}
+
+
+class FeedbackIn(BaseModel):
+    categoria: str
+    titulo: str
+    mensagem: str
+
+
+@app.post("/api/feedback", status_code=201)
+def enviar_feedback(data: FeedbackIn, request: Request):
+    quem = _usuario_logado(request)
+    if data.categoria not in FEEDBACK_CATEGORIAS_VALIDAS:
+        raise HTTPException(422, "Categoria inválida.")
+    if not data.titulo.strip() or not data.mensagem.strip():
+        raise HTTPException(422, "Preencha título e mensagem.")
+    with SessionLocal() as db:
+        f = FeedbackSAC(
+            id=_new_id(), clinicaId=quem.clinicaId, usuarioId=quem.id,
+            categoria=data.categoria, titulo=data.titulo.strip(), mensagem=data.mensagem.strip(),
+        )
+        db.add(f)
+        db.commit()
+        return {"ok": True, "id": f.id}
+
+
+@app.get("/api/feedback")
+def list_meu_feedback(request: Request):
+    """Histórico da PRÓPRIA clínica — qualquer usuário logado vê o que já
+    foi enviado (por ele ou por colegas) e a resposta, se houver."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        rows = (
+            db.query(FeedbackSAC)
+            .filter(FeedbackSAC.clinicaId == quem.clinicaId)
+            .order_by(FeedbackSAC.created_at.desc())
+            .all()
+        )
+        result = []
+        for f in rows:
+            autor = db.get(Usuario, f.usuarioId)
+            result.append({
+                "id": f.id, "categoria": f.categoria, "titulo": f.titulo, "mensagem": f.mensagem,
+                "status": f.status, "resposta": f.resposta,
+                "autorNome": autor.nome if autor else "—",
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "respondidoEm": f.respondidoEm.isoformat() if f.respondidoEm else None,
+            })
+        return result
+
+
+@app.get("/api/feedback-admin")
+def list_feedback_admin(request: Request):
+    """Visão de plataforma pro superadmin: todo feedback de todas as
+    clínicas, com contato (e-mail/WhatsApp) de quem enviar, pra ele poder
+    responder por fora se preferir."""
+    _exige_superadmin(request)
+    with SessionLocal() as db:
+        rows = db.query(FeedbackSAC).order_by(FeedbackSAC.created_at.desc()).all()
+        result = []
+        for f in rows:
+            autor = db.get(Usuario, f.usuarioId)
+            clinica = db.get(Clinica, f.clinicaId)
+            result.append({
+                "id": f.id, "categoria": f.categoria, "titulo": f.titulo, "mensagem": f.mensagem,
+                "status": f.status, "resposta": f.resposta,
+                "clinicaNome": clinica.nome if clinica else "—",
+                "autorNome": autor.nome if autor else "—",
+                "autorEmail": autor.email if autor else "",
+                "clinicaWhatsapp": clinica.telefoneWhatsapp if clinica else "",
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "respondidoEm": f.respondidoEm.isoformat() if f.respondidoEm else None,
+            })
+        return result
+
+
+class ResponderFeedbackIn(BaseModel):
+    resposta: str = ""
+    status: str = "respondido"  # respondido | fechado | aberto (reabrir)
+
+
+@app.put("/api/feedback-admin/{fid}")
+def responder_feedback(fid: str, data: ResponderFeedbackIn, request: Request):
+    _exige_superadmin(request)
+    if data.status not in ("aberto", "respondido", "fechado"):
+        raise HTTPException(422, "Status inválido.")
+    with SessionLocal() as db:
+        f = db.get(FeedbackSAC, fid)
+        if not f:
+            raise HTTPException(404, "Feedback não encontrado.")
+        if data.resposta.strip():
+            f.resposta = data.resposta.strip()
+            f.respondidoEm = datetime.now()
+        f.status = data.status
+        db.commit()
+        return {"ok": True}
 
 
 @app.get("/api/planos-saas")
