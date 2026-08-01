@@ -147,6 +147,24 @@ class Clinica(Base):
     tipoChavePix: Mapped[str] = mapped_column(String(20), default="")  # cpf | cnpj | email | telefone | aleatoria
 
 
+class FeedbackSAC(Base):
+    """Feedback/suporte enviado por um usuário de clínica pro dono da
+    plataforma — bug, sugestão, dúvida ou outro. Resposta é opcional e
+    fica registrada aqui mesmo (não manda e-mail/WhatsApp automático,
+    decisão do Richard: ele confere dentro do próprio app quando quiser)."""
+    __tablename__ = "feedback_sac"
+    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    clinicaId: Mapped[int] = mapped_column(Integer, ForeignKey("clinicas.id"))
+    usuarioId: Mapped[int] = mapped_column(Integer, ForeignKey("usuarios.id"))
+    categoria: Mapped[str] = mapped_column(String(20))  # bug | sugestao | duvida | outro
+    titulo: Mapped[str] = mapped_column(String(150))
+    mensagem: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="aberto")  # aberto | respondido | fechado
+    resposta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    respondidoEm: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class PlanoSaaS(Base):
     """Plano de assinatura da PLATAFORMA — o que cada clínica paga pra usar o
     OdontoDesk. Não confundir com o financeiro de dentro da clínica
