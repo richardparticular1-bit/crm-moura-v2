@@ -266,6 +266,9 @@ const PORTAL_TOKEN = new URLSearchParams(window.location.search).get("portal") |
 /* ── link público de anamnese remota — ?anamnese=<token>, mesma lógica do portal: sem login, página isolada ── */
 const ANAMNESE_TOKEN = new URLSearchParams(window.location.search).get("anamnese") || null;
 
+/* ── página pública do consultório (QR do verso da carteirinha) — ?consultorio=<token>, sem login ── */
+const CONSULTORIO_TOKEN = new URLSearchParams(window.location.search).get("consultorio") || null;
+
 /* ── API helpers ── */
 /* Evita cliques duplos criando registros repetidos: chamadas de escrita
    (POST/PUT/DELETE) idênticas e simultâneas são ignoradas — a segunda
@@ -2415,7 +2418,16 @@ async function _qrSvgDoPaciente(pid){
   }catch(e){}
   return "";
 }
-function _carteirinhaCardHTML(p, fotoUrl, qrSvg){
+let _QR_CONSULTORIO_CACHE = null; // mesmo QR pra todas as carteirinhas da clínica — busca uma vez só por sessão
+async function _qrSvgDoConsultorio(){
+  if(_QR_CONSULTORIO_CACHE !== null) return _QR_CONSULTORIO_CACHE;
+  try{
+    const r = await fetch(API + `/clinica/qrcode.svg`, { headers: AUTH_TOKEN ? {Authorization:"Bearer "+AUTH_TOKEN} : {} });
+    if(r.ok){ _QR_CONSULTORIO_CACHE = await r.text(); return _QR_CONSULTORIO_CACHE; }
+  }catch(e){}
+  return "";
+}
+function _carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg){
   return `<div class="cart-unit">
     <div class="card-front">
       <div class="hd">
@@ -2440,10 +2452,16 @@ function _carteirinhaCardHTML(p, fotoUrl, qrSvg){
         ${MINHA_CLINICA.logoUrl?`<img class="logo" src="${MINHA_CLINICA.logoUrl}">`:""}
         <b>${esc((MINHA_CLINICA.nome||"").toUpperCase())}</b>
       </div>
-      <div class="back-info">
-        ${MINHA_CLINICA.enderecoCompleto?`<div class="linha">${esc(MINHA_CLINICA.enderecoCompleto)}</div>`:""}
-        ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha">Fone: ${fmtPhone(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
-        ${MINHA_CLINICA.responsavelTecnico?`<div class="linha">Resp. Técnico: ${esc(MINHA_CLINICA.responsavelTecnico)}${MINHA_CLINICA.croResponsavel?` — CRO${MINHA_CLINICA.croUf?"/"+esc(MINHA_CLINICA.croUf):""} ${esc(MINHA_CLINICA.croResponsavel)}`:""}</div>`:""}
+      <div class="back-body">
+        <div class="back-info">
+          ${MINHA_CLINICA.enderecoCompleto?`<div class="linha">${esc(MINHA_CLINICA.enderecoCompleto)}</div>`:""}
+          ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha">Fone: ${fmtPhone(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
+          ${MINHA_CLINICA.responsavelTecnico?`<div class="linha">Resp. Técnico: ${esc(MINHA_CLINICA.responsavelTecnico)}${MINHA_CLINICA.croResponsavel?` — CRO${MINHA_CLINICA.croUf?"/"+esc(MINHA_CLINICA.croUf):""} ${esc(MINHA_CLINICA.croResponsavel)}`:""}</div>`:""}
+        </div>
+        ${consultorioQrSvg?`<div class="back-qr">
+          <div class="qr">${consultorioQrSvg}</div>
+          <div class="back-qr-label">Site, redes e avaliações</div>
+        </div>`:""}
       </div>
       <div class="back-aviso">Documento de identificação do paciente — uso exclusivo desta clínica.</div>
     </div>
@@ -2466,8 +2484,12 @@ const CARTEIRINHA_CSS = `
     .cart-unit .info .linha.whats{ color:#16a34a; font-weight:600; }
     .cart-unit .qr{ width:15mm; height:15mm; flex-shrink:0; }
     .cart-unit .qr svg{ width:100%; height:100% }
-    .cart-unit .back-info{ flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:1mm; }
+    .cart-unit .back-body{ display:flex; gap:2.5mm; flex-grow:1; align-items:center; }
+    .cart-unit .back-info{ flex-grow:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:1mm; }
     .cart-unit .back-info .linha{ font-size:7px; color:#475569; line-height:1.5 }
+    .cart-unit .back-qr{ display:flex; flex-direction:column; align-items:center; flex-shrink:0; }
+    .cart-unit .back-qr .qr{ width:13mm; height:13mm; }
+    .cart-unit .back-qr-label{ font-size:5px; color:#94a3b8; text-align:center; margin-top:.5mm; width:15mm; line-height:1.2; }
     .cart-unit .back-aviso{ font-size:6px; color:#94a3b8; text-align:center; }`;
 async function gerarCarteirinha(pid){
   const p = pById(pid); if(!p) return;
@@ -2476,6 +2498,7 @@ async function gerarCarteirinha(pid){
   let fotoUrl = null;
   try{ const r = await api("GET", `/patients/${pid}/foto/url`); fotoUrl = r.url; }catch(e){}
   const qrSvg = await _qrSvgDoPaciente(pid);
+  const consultorioQrSvg = await _qrSvgDoConsultorio();
   if(!win){ toast("Permita pop-ups para gerar a carteirinha."); return; }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Carteirinha - ${esc(p.name)}</title>
   <style>
@@ -2485,7 +2508,7 @@ async function gerarCarteirinha(pid){
     @media print{ .noprint{display:none} body{background:#fff;padding:0} }
   </style></head><body>
     <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button></div>
-    ${_carteirinhaCardHTML(p, fotoUrl, qrSvg)}
+    ${_carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg)}
   </body></html>`;
   win.document.open();
   win.document.write(html);
@@ -2498,11 +2521,12 @@ async function gerarCarteirinhasLote(dataISO){
   if(pacientes.length===0){ toast("Nenhum paciente com consulta nesse dia."); return; }
   const win = window.open("", "_blank");
   if(win) win.document.write(`<p style='font-family:sans-serif;padding:40px;color:#666'>Gerando ${pacientes.length} carteirinha${pacientes.length>1?"s":""}…</p>`);
+  const consultorioQrSvg = await _qrSvgDoConsultorio();
   const cards = await Promise.all(pacientes.map(async p=>{
     let fotoUrl = null;
     try{ const r = await api("GET", `/patients/${p.id}/foto/url`); fotoUrl = r.url; }catch(e){}
     const qrSvg = await _qrSvgDoPaciente(p.id);
-    return _carteirinhaCardHTML(p, fotoUrl, qrSvg);
+    return _carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg);
   }));
   if(!win){ toast("Permita pop-ups para gerar as carteirinhas."); return; }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Carteirinhas - ${fmtDate(dataISO)}</title>
@@ -4771,6 +4795,12 @@ function vSettings(){
   </div>`:""}
   <div class="card" style="margin-bottom:12px"><h2>Geral</h2>
     <label class="f"><span>Link de avaliação no Google</span><input id="s-link" value="${esc(s.googleReviewLink||"")}"></label>
+    <div class="grid g3">
+      <label class="f"><span>Instagram</span><input id="s-instagram" value="${esc(s.instagramUrl||"")}" placeholder="https://instagram.com/..."></label>
+      <label class="f"><span>Facebook</span><input id="s-facebook" value="${esc(s.facebookUrl||"")}" placeholder="https://facebook.com/..."></label>
+      <label class="f"><span>Site</span><input id="s-site" value="${esc(s.siteUrl||"")}" placeholder="https://..."></label>
+    </div>
+    <p class="meta" style="margin:-6px 0 11px">Esses três + a avaliação Google aparecem na página do QR do consultório, no verso da carteirinha.</p>
     <label class="f"><span>Meses sem visita para paciente inativo</span><input type="number" min="1" id="s-months" value="${s.inactivityMonths||6}" style="max-width:110px"></label>
     <label class="f"><span>Retorno preventivo padrão (meses)</span><input type="number" min="1" id="s-retorno" value="${s.retornoMesesPadrao||6}" style="max-width:110px"></label>
   </div>
@@ -4872,6 +4902,7 @@ async function saveSettings(){
   const g=i=>document.getElementById(i).value;
   await api("PUT","/settings",{
     googleReviewLink:g("s-link").trim(), inactivityMonths:g("s-months"),
+    instagramUrl:g("s-instagram").trim(), facebookUrl:g("s-facebook").trim(), siteUrl:g("s-site").trim(),
     retornoMesesPadrao:g("s-retorno"),
     msgConfirm:g("s-confirm"), msgReactivate:g("s-react"), msgSurvey:g("s-survey"),
     msgReview:g("s-review"), msgAniversario:g("s-bday"), msgRetorno:g("s-retorno-msg"),
@@ -5433,9 +5464,49 @@ async function renderAnamnesePublica(token){
   });
 }
 
+/* ════════════════════════════════════════════
+   PÁGINA PÚBLICA DO CONSULTÓRIO — QR institucional no verso da carteirinha.
+   Sem login, sem dado de paciente nenhum: só endereço, WhatsApp, site,
+   redes sociais e link de avaliação Google.
+════════════════════════════════════════════ */
+async function renderConsultorioPublico(token){
+  document.title = "Consultório";
+  document.body.innerHTML = `<div id="cons-root" style="max-width:440px;margin:0 auto;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#f8fafc">
+    <div style="text-align:center;padding:60px 0;color:#64748b"><span class="spinner" style="border-color:#0f766e;border-top-color:transparent"></span> Carregando…</div>
+  </div>`;
+  let d;
+  try{
+    const r = await fetch(API + "/consultorio-publico/" + encodeURIComponent(token));
+    if(!r.ok) throw new Error("not found");
+    d = await r.json();
+  }catch(e){
+    document.getElementById("cons-root").innerHTML = `<div style="text-align:center;padding:60px 20px;color:#64748b">
+      <div style="font-size:40px;margin-bottom:10px">🔒</div><p>Link inválido.</p></div>`;
+    return;
+  }
+  const waNum = digits(d.telefoneWhatsapp||"");
+  const root = document.getElementById("cons-root");
+  const linkCard = (url, emoji, label) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:#0f172a;font-weight:600;font-size:14px">
+      <span style="font-size:18px">${emoji}</span> ${esc(label)}
+    </a>` : "";
+  root.innerHTML = `
+    <div style="text-align:center;margin-bottom:20px">
+      ${d.logoUrl?`<img src="${d.logoUrl}" style="width:56px;height:56px;object-fit:contain;border-radius:12px;margin-bottom:8px">`:""}
+      <h1 style="font-size:18px;margin:0;color:#0f172a">${esc(d.nome||"Consultório")}</h1>
+      ${d.enderecoCompleto?`<p style="color:#64748b;font-size:13px;margin:6px 0 0">${esc(d.enderecoCompleto)}</p>`:""}
+    </div>
+    ${waNum?`<a href="https://wa.me/55${waNum}" target="_blank" style="display:block;text-align:center;padding:13px;background:#16a34a;color:#fff;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;margin-bottom:16px">💬 Falar no WhatsApp</a>`:""}
+    ${linkCard(d.siteUrl, "🌐", "Site")}
+    ${linkCard(d.instagramUrl, "📸", "Instagram")}
+    ${linkCard(d.facebookUrl, "👍", "Facebook")}
+    ${linkCard(d.googleReviewLink, "⭐", "Avaliar no Google")}
+  `;
+}
+
 (async function boot(){
   if(PORTAL_TOKEN){ await renderPortalPaciente(PORTAL_TOKEN); return; }
   if(ANAMNESE_TOKEN){ await renderAnamnesePublica(ANAMNESE_TOKEN); return; }
+  if(CONSULTORIO_TOKEN){ await renderConsultorioPublico(CONSULTORIO_TOKEN); return; }
   const params = new URLSearchParams(window.location.search);
   const verifyToken = params.get("verify");
   if(verifyToken){
