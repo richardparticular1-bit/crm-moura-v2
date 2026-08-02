@@ -138,6 +138,7 @@ class Clinica(Base):
     logoPath: Mapped[str | None] = mapped_column(String(300), nullable=True)
     responsavelTecnico: Mapped[str] = mapped_column(String(150), default="")  # dentista responsável técnico
     croResponsavel: Mapped[str] = mapped_column(String(30), default="")       # CRO do responsável técnico
+    croUf: Mapped[str] = mapped_column(String(4), default="")                 # UF do CRO — ex: "PR", exibido como CRO/PR
     cnpj: Mapped[str] = mapped_column(String(20), default="")
     enderecoCompleto: Mapped[str] = mapped_column(String(300), default="")
     telefoneWhatsapp: Mapped[str] = mapped_column(String(30), default="")
