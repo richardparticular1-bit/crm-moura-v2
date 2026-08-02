@@ -146,6 +146,10 @@ class Clinica(Base):
     cidade: Mapped[str] = mapped_column(String(60), default="")   # usado no payload do Pix (campo "merchant city")
     chavePix: Mapped[str] = mapped_column(String(140), default="")  # CPF/CNPJ/e-mail/telefone/chave aleatória
     tipoChavePix: Mapped[str] = mapped_column(String(20), default="")  # cpf | cnpj | email | telefone | aleatoria
+    # Token opaco (256 bits) pro QR/página pública do consultório — mesmo
+    # princípio do tokenPortal do paciente: nunca usar o id sequencial pra
+    # isso, pra ninguém conseguir "passear" trocando o número na URL.
+    tokenInfo: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
 
 
 class FeedbackSAC(Base):
