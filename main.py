@@ -137,7 +137,7 @@ SESSAO_DIAS = 30
 AUTH_LIVRE = ("/api/auth/login", "/api/auth/setup", "/api/auth/status",
               "/api/signup", "/api/verify-email", "/api/resend-verification",
               "/api/plataforma", "/api/portal", "/api/anamnese-publica",
-              "/api/webhooks/mercadopago")
+              "/api/webhooks/mercadopago", "/api/consultorio-publico")
 
 
 def _hash_senha(senha: str) -> str:
@@ -1434,6 +1434,56 @@ def get_patient_qrcode(pid: str, request: Request):
     buf = io.BytesIO()
     img.save(buf)
     return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
+def _garantir_token_info(db, c: Clinica) -> str:
+    """Mesmo princípio do tokenPortal do paciente, só que pro CONSULTÓRIO —
+    QR institucional (endereço, redes sociais, avaliação, WhatsApp) que vai
+    no verso da carteirinha. Nada sensível nessa página, mas o token opaco
+    evita que alguém troque um número na URL e veja a página de outra clínica."""
+    if not c.tokenInfo:
+        c.tokenInfo = secrets.token_urlsafe(24)
+        db.commit()
+        db.refresh(c)
+    return c.tokenInfo
+
+
+@app.get("/api/clinica/qrcode.svg")
+def get_clinica_qrcode(request: Request):
+    """QR pro verso da carteirinha: aponta pra página pública do consultório
+    (endereço, redes sociais, site, avaliação Google, WhatsApp)."""
+    quem = _usuario_logado(request)
+    with SessionLocal() as db:
+        c = db.get(Clinica, quem.clinicaId)
+        if not c:
+            raise HTTPException(404, "Clínica não encontrada.")
+        token = _garantir_token_info(db, c)
+    url = f"{APP_URL}/?consultorio={token}"
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf)
+    return Response(content=buf.getvalue(), media_type="image/svg+xml")
+
+
+@app.get("/api/consultorio-publico/{token}")
+def get_consultorio_publico(token: str):
+    """Página pública do consultório — sem login, protegida só pelo token
+    opaco do QR. Só informação institucional (nada de paciente aqui):
+    endereço, WhatsApp, site, redes sociais, link de avaliação Google."""
+    with SessionLocal() as db:
+        c = db.query(Clinica).filter(Clinica.tokenInfo == token).first()
+        if not c:
+            raise HTTPException(404, "Link inválido.")
+        logo_url = _sb_signed_url_or_none(_path_logo_clinica(c.id), segundos=3600) if c.logoPath else None
+        configs = {cfg.key: cfg.value for cfg in db.query(Config).filter(Config.clinicaId == c.id).all()}
+        return {
+            "nome": c.nome, "logoUrl": logo_url, "enderecoCompleto": c.enderecoCompleto,
+            "telefoneWhatsapp": c.telefoneWhatsapp,
+            "instagramUrl": configs.get("instagramUrl", ""),
+            "facebookUrl": configs.get("facebookUrl", ""),
+            "siteUrl": configs.get("siteUrl", ""),
+            "googleReviewLink": configs.get("googleReviewLink", ""),
+        }
 
 
 # ══════════════════════════════════════════════════════════════════════════════
