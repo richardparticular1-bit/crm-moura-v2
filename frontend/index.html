@@ -254,7 +254,7 @@ let AUTH_IS_SUPERADMIN = false;
 
 /* ── marca (plataforma = neutra, exibida antes do login; clínica = a do usuário logado) ── */
 let PLATAFORMA = { nome: "OdontoDesk", logoUrl: null };
-let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", cidade: "", chavePix: "", tipoChavePix: "", logoUrl: null };
+let MINHA_CLINICA = { nome: "", responsavelTecnico: "", croResponsavel: "", croUf: "", cnpj: "", enderecoCompleto: "", telefoneWhatsapp: "", email: "", cidade: "", chavePix: "", tipoChavePix: "", logoUrl: null };
 
 /* ── deep-link da carteirinha (QR) — ?paciente=<id> abre a ficha direto após o login ── */
 let QR_PACIENTE_ALVO = new URLSearchParams(window.location.search).get("paciente") || null;
@@ -343,7 +343,7 @@ async function carregarMinhaClinica(){
     AUTH_IS_SUPERADMIN = !!me.isSuperAdmin;
     MINHA_CLINICA = {
       nome: c.nome || "", responsavelTecnico: c.responsavelTecnico || "", croResponsavel: c.croResponsavel || "",
-      cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
+      croUf: c.croUf || "", cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
       email: c.email || "", cidade: c.cidade || "", chavePix: c.chavePix || "", tipoChavePix: c.tipoChavePix || "", logoUrl: c.logoUrl || null,
     };
     MINHA_ASSINATURA = assin;
@@ -453,6 +453,12 @@ function todayISO() { const d=new Date(); return d.getFullYear()+"-"+String(d.ge
 const fmtDate = iso => iso ? iso.split("-").reverse().join("/") : "—";
 function fmtTime(iso){ if(!iso) return ""; const d=new Date(iso); return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0"); }
 const digits = s => (s||"").replace(/\D/g,"");
+function fmtPhone(s){
+  const d = digits(s);
+  if(d.length===11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+  if(d.length===10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+  return s||"";
+}
 function addDays(iso,n){ const d=new Date(iso+"T00:00:00"); d.setDate(d.getDate()+n); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function monthsAgo(n){ const d=new Date(); d.setMonth(d.getMonth()-n); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function wa(phone,msg){ let p=digits(phone); if(p.length<=11) p="55"+p; return "https://wa.me/"+p+"?text="+encodeURIComponent(msg); }
@@ -2419,10 +2425,11 @@ function _carteirinhaCardHTML(p, fotoUrl, qrSvg){
       <div class="body">
         ${fotoUrl?`<img class="foto" src="${fotoUrl}">`:`<div class="foto" style="display:flex;align-items:center;justify-content:center;font-size:14px;color:#94a3b8;font-weight:700">${initials(p.name)}</div>`}
         <div class="info">
+          <div class="tipo-doc">PACIENTE</div>
           <div class="nome">${esc(p.name)}</div>
           ${p.numProntuario?`<div class="linha">Prontuário: ${esc(p.numProntuario)}</div>`:""}
           ${p.birth?`<div class="linha">Nasc.: ${fmtDate(p.birth)}</div>`:""}
-          ${p.phone?`<div class="linha">${esc(p.phone)}</div>`:""}
+          ${p.phone?`<div class="linha whats">💬 ${fmtPhone(p.phone)}</div>`:""}
         </div>
         <div class="qr">${qrSvg}</div>
       </div>
@@ -2435,8 +2442,8 @@ function _carteirinhaCardHTML(p, fotoUrl, qrSvg){
       </div>
       <div class="back-info">
         ${MINHA_CLINICA.enderecoCompleto?`<div class="linha">${esc(MINHA_CLINICA.enderecoCompleto)}</div>`:""}
-        ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha">Fone: ${esc(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
-        ${MINHA_CLINICA.responsavelTecnico?`<div class="linha">Resp. Técnico: ${esc(MINHA_CLINICA.responsavelTecnico)}${MINHA_CLINICA.croResponsavel?" — CRO "+esc(MINHA_CLINICA.croResponsavel):""}</div>`:""}
+        ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha">Fone: ${fmtPhone(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
+        ${MINHA_CLINICA.responsavelTecnico?`<div class="linha">Resp. Técnico: ${esc(MINHA_CLINICA.responsavelTecnico)}${MINHA_CLINICA.croResponsavel?` — CRO${MINHA_CLINICA.croUf?"/"+esc(MINHA_CLINICA.croUf):""} ${esc(MINHA_CLINICA.croResponsavel)}`:""}</div>`:""}
       </div>
       <div class="back-aviso">Documento de identificação do paciente — uso exclusivo desta clínica.</div>
     </div>
@@ -2453,8 +2460,10 @@ const CARTEIRINHA_CSS = `
     .cart-unit .body{ display:flex; gap:3mm; flex-grow:1; align-items:center; }
     .cart-unit .foto{ width:16mm; height:16mm; border-radius:2mm; background:#e2e8f0; object-fit:cover; flex-shrink:0; }
     .cart-unit .info{ flex-grow:1; min-width:0; }
+    .cart-unit .info .tipo-doc{ font-size:5.5px; font-weight:700; letter-spacing:.8px; color:#0f766e; margin-bottom:1mm; }
     .cart-unit .info .nome{ font-size:10.5px; font-weight:700; line-height:1.2; margin-bottom:1mm; }
     .cart-unit .info .linha{ font-size:7.5px; color:#475569; line-height:1.5 }
+    .cart-unit .info .linha.whats{ color:#16a34a; font-weight:600; }
     .cart-unit .qr{ width:15mm; height:15mm; flex-shrink:0; }
     .cart-unit .qr svg{ width:100%; height:100% }
     .cart-unit .back-info{ flex-grow:1; display:flex; flex-direction:column; justify-content:center; gap:1mm; }
@@ -4717,11 +4726,12 @@ function vSettings(){
     <input type="file" id="clinica-logo-input" accept="image/*" style="display:none" onchange="handleLogoFileInput(this,'clinica')">
     <label class="f"><span>Nome da clínica</span><input id="cl-nome" value="${esc(MINHA_CLINICA.nome)}"></label>
     <label class="f"><span>Responsável técnico</span><input id="cl-resp" value="${esc(MINHA_CLINICA.responsavelTecnico)}" placeholder="Nome do dentista responsável"></label>
-    <div class="grid g2">
-      <label class="f"><span>CRO do responsável</span><input id="cl-cro" value="${esc(MINHA_CLINICA.croResponsavel)}"></label>
+    <div class="grid g3">
+      <label class="f"><span>CRO do responsável</span><input id="cl-cro" value="${esc(MINHA_CLINICA.croResponsavel)}" placeholder="21165"></label>
+      <label class="f"><span>UF do CRO</span><input id="cl-cro-uf" value="${esc(MINHA_CLINICA.croUf)}" placeholder="PR" maxlength="2" style="text-transform:uppercase"></label>
       <label class="f"><span>CNPJ</span><input id="cl-cnpj" value="${esc(MINHA_CLINICA.cnpj)}"></label>
     </div>
-    <label class="f"><span>Endereço completo</span><input id="cl-endereco" value="${esc(MINHA_CLINICA.enderecoCompleto)}"></label>
+    <label class="f"><span>Endereço completo</span><input id="cl-endereco" value="${esc(MINHA_CLINICA.enderecoCompleto)}" placeholder="Rua, número, Bairro, Cidade - UF, CEP"></label>
     <div class="grid g2">
       <label class="f"><span>WhatsApp</span><input id="cl-whatsapp" value="${esc(MINHA_CLINICA.telefoneWhatsapp)}"></label>
       <label class="f"><span>E-mail da clínica</span><input id="cl-email" value="${esc(MINHA_CLINICA.email)}"></label>
@@ -4813,7 +4823,7 @@ async function saveClinicaPerfil(){
   const nome = g("cl-nome").trim();
   if(!nome){ toast("Informe o nome da clínica."); return; }
   await api("PUT","/clinica",{
-    nome, responsavelTecnico:g("cl-resp").trim(), croResponsavel:g("cl-cro").trim(),
+    nome, responsavelTecnico:g("cl-resp").trim(), croResponsavel:g("cl-cro").trim(), croUf:g("cl-cro-uf").trim(),
     cnpj:g("cl-cnpj").trim(), enderecoCompleto:g("cl-endereco").trim(),
     telefoneWhatsapp:g("cl-whatsapp").trim(), email:g("cl-email").trim(),
     cidade:g("cl-cidade").trim(), chavePix:g("cl-pix").trim(), tipoChavePix:g("cl-tipo-pix"),
