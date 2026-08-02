@@ -2441,7 +2441,7 @@ function _carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg){
           <div class="nome">${esc(p.name)}</div>
           ${p.numProntuario?`<div class="linha">Prontuário: ${esc(p.numProntuario)}</div>`:""}
           ${p.birth?`<div class="linha">Nasc.: ${fmtDate(p.birth)}</div>`:""}
-          ${p.phone?`<div class="linha whats">💬 ${fmtPhone(p.phone)}</div>`:""}
+          ${p.phone?`<div class="linha">${fmtPhone(p.phone)}</div>`:""}
         </div>
         <div class="qr">${qrSvg}</div>
       </div>
@@ -2455,7 +2455,7 @@ function _carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg){
       <div class="back-body">
         <div class="back-info">
           ${MINHA_CLINICA.enderecoCompleto?`<div class="linha">${esc(MINHA_CLINICA.enderecoCompleto)}</div>`:""}
-          ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha">Fone: ${fmtPhone(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
+          ${MINHA_CLINICA.telefoneWhatsapp?`<div class="linha whats">💬 Fone: ${fmtPhone(MINHA_CLINICA.telefoneWhatsapp)}</div>`:""}
           ${MINHA_CLINICA.responsavelTecnico?`<div class="linha">Resp. Técnico: ${esc(MINHA_CLINICA.responsavelTecnico)}${MINHA_CLINICA.croResponsavel?` — CRO${MINHA_CLINICA.croUf?"/"+esc(MINHA_CLINICA.croUf):""} ${esc(MINHA_CLINICA.croResponsavel)}`:""}</div>`:""}
         </div>
         ${consultorioQrSvg?`<div class="back-qr">
@@ -2481,12 +2481,12 @@ const CARTEIRINHA_CSS = `
     .cart-unit .info .tipo-doc{ font-size:5.5px; font-weight:700; letter-spacing:.8px; color:#0f766e; margin-bottom:1mm; }
     .cart-unit .info .nome{ font-size:10.5px; font-weight:700; line-height:1.2; margin-bottom:1mm; }
     .cart-unit .info .linha{ font-size:7.5px; color:#475569; line-height:1.5 }
-    .cart-unit .info .linha.whats{ color:#16a34a; font-weight:600; }
     .cart-unit .qr{ width:15mm; height:15mm; flex-shrink:0; }
     .cart-unit .qr svg{ width:100%; height:100% }
     .cart-unit .back-body{ display:flex; gap:2.5mm; flex-grow:1; align-items:center; }
     .cart-unit .back-info{ flex-grow:1; min-width:0; display:flex; flex-direction:column; justify-content:center; gap:1mm; }
     .cart-unit .back-info .linha{ font-size:7px; color:#475569; line-height:1.5 }
+    .cart-unit .back-info .linha.whats{ color:#16a34a; font-weight:700; }
     .cart-unit .back-qr{ display:flex; flex-direction:column; align-items:center; flex-shrink:0; }
     .cart-unit .back-qr .qr{ width:13mm; height:13mm; }
     .cart-unit .back-qr-label{ font-size:5px; color:#94a3b8; text-align:center; margin-top:.5mm; width:15mm; line-height:1.2; }
@@ -2505,9 +2505,19 @@ async function gerarCarteirinha(pid){
     body{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; background:#f1f5f9; margin:0; padding:24px; }
     .noprint{ margin-bottom:16px }
     ${CARTEIRINHA_CSS}
-    @media print{ .noprint{display:none} body{background:#fff;padding:0} }
-  </style></head><body>
-    <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button></div>
+    @media print{ .noprint{display:none} body{background:#fff;padding:0} body.mode-gray{filter:grayscale(1)} body.mode-allblack{filter:grayscale(1) contrast(1000%)} }
+  </style></head><body class="mode-color">
+    <div class="noprint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#334155">
+        Modo:
+        <select onchange="document.body.classList.remove('mode-color','mode-gray','mode-allblack');document.body.classList.add(this.value)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+          <option value="mode-color" selected>Colorida</option>
+          <option value="mode-gray">Escala de cinza</option>
+          <option value="mode-allblack">Preto e branco (alto contraste)</option>
+        </select>
+      </label>
+    </div>
     ${_carteirinhaCardHTML(p, fotoUrl, qrSvg, consultorioQrSvg)}
   </body></html>`;
   win.document.open();
@@ -2535,10 +2545,20 @@ async function gerarCarteirinhasLote(dataISO){
     .noprint{ margin-bottom:16px }
     .folha{ display:grid; grid-template-columns:repeat(2,85.6mm); gap:6mm; justify-content:center; }
     ${CARTEIRINHA_CSS}
-    @media print{ .noprint{display:none} body{background:#fff;padding:0} .folha{gap:4mm} }
-  </style></head><body>
-    <div class="noprint"><button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
-    <span style="margin-left:10px;color:#666;font-size:13px">${pacientes.length} carteirinha${pacientes.length>1?"s":""} — consultas de ${fmtDate(dataISO)}</span></div>
+    @media print{ .noprint{display:none} body{background:#fff;padding:0} .folha{gap:4mm} body.mode-gray{filter:grayscale(1)} body.mode-allblack{filter:grayscale(1) contrast(1000%)} }
+  </style></head><body class="mode-color">
+    <div class="noprint" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button onclick="window.print()" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer">🖨️ Imprimir / Salvar PDF</button>
+      <span style="color:#666;font-size:13px">${pacientes.length} carteirinha${pacientes.length>1?"s":""} — consultas de ${fmtDate(dataISO)}</span>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#334155">
+        Modo:
+        <select onchange="document.body.classList.remove('mode-color','mode-gray','mode-allblack');document.body.classList.add(this.value)" style="padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+          <option value="mode-color" selected>Colorida</option>
+          <option value="mode-gray">Escala de cinza</option>
+          <option value="mode-allblack">Preto e branco (alto contraste)</option>
+        </select>
+      </label>
+    </div>
     <div class="folha">${cards.join("")}</div>
   </body></html>`;
   win.document.open();
