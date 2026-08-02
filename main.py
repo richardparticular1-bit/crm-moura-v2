@@ -1055,6 +1055,7 @@ class ClinicaPerfilIn(BaseModel):
     nome: str
     responsavelTecnico: str = ""
     croResponsavel: str = ""
+    croUf: str = ""
     cnpj: str = ""
     enderecoCompleto: str = ""
     telefoneWhatsapp: str = ""
@@ -1114,7 +1115,7 @@ def get_clinica(request: Request):
         logo_url = _sb_signed_url_or_none(_path_logo_clinica(c.id), segundos=3600) if c.logoPath else None
         return {
             "nome": c.nome, "responsavelTecnico": c.responsavelTecnico, "croResponsavel": c.croResponsavel,
-            "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
+            "croUf": c.croUf, "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
             "email": c.email, "cidade": c.cidade, "chavePix": c.chavePix, "tipoChavePix": c.tipoChavePix,
             "logoUrl": logo_url,
         }
@@ -1134,6 +1135,7 @@ def update_clinica(data: ClinicaPerfilIn, request: Request):
         c.nome = nome
         c.responsavelTecnico = data.responsavelTecnico.strip()
         c.croResponsavel = data.croResponsavel.strip()
+        c.croUf = data.croUf.strip().upper()[:4]
         c.cnpj = data.cnpj.strip()
         c.enderecoCompleto = data.enderecoCompleto.strip()
         c.telefoneWhatsapp = data.telefoneWhatsapp.strip()
