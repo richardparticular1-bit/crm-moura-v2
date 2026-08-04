@@ -646,6 +646,7 @@ function vPatients(){
         <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${p.cpf?" · CPF: "+esc(p.cpf):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
       </div>
       ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
+      <button class="icon-btn" onclick="abrirMensagemRapida('${p.id}')" aria-label="Enviar mensagem" title="Enviar mensagem no WhatsApp">${IC.send}</button>
       <button class="btn ghost sm" onclick="openFicha('${p.id}')">📋 Prontuário</button>
       <button class="icon-btn" onclick="agendarPaciente('${p.id}')" aria-label="Agendar consulta" title="Agendar consulta">${IC.cal}</button>
       <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
@@ -665,6 +666,22 @@ async function sendBirthday(id){
   window.open(wa(p.phone,msg),"_blank");
   await api("PUT",`/patients/${id}/birthday-sent`);
   toast("Parabéns enviado!");
+}
+function abrirMensagemRapida(pid){
+  const p = pById(pid); if(!p) return;
+  if(!p.phone){ toast("Este paciente não tem telefone cadastrado."); return; }
+  modal(`Enviar mensagem — ${esc(p.name)}`, `
+    <label class="f"><span>Mensagem</span><textarea id="mr-texto" rows="4" placeholder="Digite a mensagem…"></textarea></label>
+    <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
+    <button class="btn whats" onclick="enviarMensagemRapida('${pid}')">${IC.send} Enviar no WhatsApp</button></div>`);
+  setTimeout(()=>document.getElementById("mr-texto")?.focus(), 50);
+}
+function enviarMensagemRapida(pid){
+  const p = pById(pid); if(!p) return;
+  const texto = document.getElementById("mr-texto")?.value.trim();
+  if(!texto){ toast("Digite uma mensagem."); return; }
+  window.open(wa(p.phone,texto),"_blank");
+  closeModal();
 }
 function openPatientForm(id){
   const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:"",numProntuario:"",
@@ -2728,6 +2745,7 @@ function vFicha(){
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
     <button class="btn ghost sm" onclick="agendarPaciente('${p.id}')">${IC.cal} Agendar</button>
+    <button class="btn ghost sm" onclick="abrirMensagemRapida('${p.id}')">${IC.send} Mensagem</button>
     <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
     <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
     <button class="btn ghost sm" onclick="abrirCompartilharAnamnese('${p.id}','${esc(p.name)}','${esc(p.phone)}')">📤 Anamnese remota</button>
