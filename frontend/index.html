@@ -2859,12 +2859,9 @@ function vFicha(){
           <button class="icon-btn del" onclick="delAnexo('${a.id}')" aria-label="Excluir">${IC.trash}</button>
         </div>`).join("")}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
-      <select id="anexo-cat" style="width:auto;font-size:13px;padding:7px 10px">
-        ${Object.entries(CATEGORIAS_ANEXO).map(([k,v])=>`<option value="${k}">${ICONE_ANEXO[k]} ${v}</option>`).join("")}
-      </select>
-      <button class="btn ghost sm" onclick="document.getElementById('anexo-file').click()">${IC.upload} Anexar arquivo</button>
-      <input type="file" id="anexo-file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" style="display:none" onchange="uploadAnexo(this)">
-      <span class="meta">Imagens ou PDF, até 15 MB.</span>
+      <button class="btn ghost sm" onclick="document.getElementById('anexo-file').click()">${IC.upload} Anexar arquivos</button>
+      <input type="file" id="anexo-file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" multiple style="display:none" onchange="uploadAnexoMultiplo(this)">
+      <span class="meta">Selecione um ou vários — a categoria de cada um se escolhe a seguir. Imagens ou PDF, até 15 MB.</span>
     </div>
   </div>
 
@@ -2934,21 +2931,110 @@ async function saveEvolucao(){
   FICHA_EVOLUCOES = await api("GET", `/evolucoes?patient_id=${encodeURIComponent(FICHA_ID)}`);
   render(); toast("Evolução registrada. 📋");
 }
-async function uploadAnexo(input){
-  const f = input.files[0]; if(!f) return;
+/* ── upload múltiplo de anexos: seleciona vários arquivos de uma vez e
+   escolhe a categoria de CADA UM (foto/radiografia/documento/consentimento/
+   outro) num modal antes de enviar, com atalho "aplicar a todos". Fica de
+   fora daqui periapical/facial/elemento — essas grades de posição fixa já
+   têm seus próprios fluxos dedicados (clique no slot). ── */
+const ANEXO_MIMES_CLIENTE = new Set(["image/jpeg","image/png","image/webp","image/gif","application/pdf"]);
+const CATEGORIAS_ANEXO_SIMPLES = { foto:"Foto", radiografia:"Radiografia", documento:"Documento", consentimento:"Consentimento", outro:"Outro" };
+let ANEXO_MULTI_FILES = []; // [{file, url(preview ou null), categoria}]
+
+function uploadAnexoMultiplo(input){
+  const escolhidos = Array.from(input.files || []);
   input.value = "";
-  if(f.size > 15*1024*1024){ toast("Arquivo maior que 15 MB."); return; }
-  const cat = document.getElementById("anexo-cat")?.value || "documento";
-  toast("Enviando arquivo…");
-  const fd = new FormData();
-  fd.append("patientId", FICHA_ID);
-  fd.append("categoria", cat);
-  fd.append("file", f);
-  const novo = await apiUpload("/anexos", fd);
-  FICHA_ANEXOS = [novo, ...FICHA_ANEXOS];
+  if(escolhidos.length === 0) return;
+  const validos = [];
+  let invalidos = 0;
+  for(const f of escolhidos){
+    if(!ANEXO_MIMES_CLIENTE.has((f.type||"").toLowerCase()) || f.size > 15*1024*1024){ invalidos++; continue; }
+    validos.push(f);
+  }
+  if(invalidos) toast(`${invalidos} arquivo${invalidos>1?"s":""} ignorado${invalidos>1?"s":""} (tipo não suportado ou maior que 15 MB).`);
+  if(validos.length === 0) return;
+  ANEXO_MULTI_FILES = validos.map(f => ({
+    file: f,
+    url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
+    categoria: f.type.startsWith("image/") ? "foto" : "documento",
+  }));
+  renderAnexoMultiModal();
+}
+function renderAnexoMultiModal(){
+  const n = ANEXO_MULTI_FILES.length;
+  modal(`Anexar ${n} arquivo${n>1?"s":""}`, `
+    ${n>1?`<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span class="meta">Categoria para todos:</span>
+      <select id="anexo-multi-bulk" style="width:auto;font-size:13px;padding:6px 9px">
+        ${Object.entries(CATEGORIAS_ANEXO_SIMPLES).map(([k,v])=>`<option value="${k}">${ICONE_ANEXO[k]} ${v}</option>`).join("")}
+      </select>
+      <button class="btn ghost sm" onclick="aplicarCategoriaAnexoMultiTodos()">Aplicar a todos</button>
+    </div>`:""}
+    <div id="anexo-multi-list" style="max-height:52vh;overflow-y:auto">
+      ${ANEXO_MULTI_FILES.map((it,i)=>_anexoMultiRowHTML(it,i)).join("")}
+    </div>
+    <div class="acts"><button class="btn ghost" onclick="fecharAnexoMulti()">Cancelar</button>
+    <button class="btn" onclick="confirmarAnexoMulti()">${IC.upload} Anexar ${n} arquivo${n>1?"s":""}</button></div>`);
+}
+function _anexoMultiRowHTML(it, i){
+  const thumb = it.url
+    ? `<img src="${it.url}" style="width:100%;height:100%;object-fit:cover">`
+    : `<span style="font-size:18px">${it.file.type==="application/pdf"?"📄":"📎"}</span>`;
+  return `<div class="row" style="align-items:center">
+    <div style="width:44px;height:44px;border-radius:8px;overflow:hidden;background:#f1f5f9;display:flex;align-items:center;justify-content:center;flex-shrink:0">${thumb}</div>
+    <div class="grow" style="min-width:0">
+      <div style="font-size:13px;font-weight:500;word-break:break-all">${esc(it.file.name)}</div>
+      <div class="meta">${fmtBytes(it.file.size)}</div>
+    </div>
+    <select onchange="ANEXO_MULTI_FILES[${i}].categoria=this.value" style="width:auto;font-size:13px;padding:6px 9px">
+      ${Object.entries(CATEGORIAS_ANEXO_SIMPLES).map(([k,v])=>`<option value="${k}" ${it.categoria===k?"selected":""}>${ICONE_ANEXO[k]} ${v}</option>`).join("")}
+    </select>
+    <button class="icon-btn del" onclick="removerAnexoMulti(${i})" aria-label="Remover">${IC.x}</button>
+  </div>`;
+}
+function aplicarCategoriaAnexoMultiTodos(){
+  const v = document.getElementById("anexo-multi-bulk")?.value;
+  if(!v) return;
+  ANEXO_MULTI_FILES.forEach(it=>it.categoria=v);
+  renderAnexoMultiModal();
+}
+function removerAnexoMulti(i){
+  if(ANEXO_MULTI_FILES[i]?.url) URL.revokeObjectURL(ANEXO_MULTI_FILES[i].url);
+  ANEXO_MULTI_FILES.splice(i,1);
+  if(ANEXO_MULTI_FILES.length===0){ closeModal(); return; }
+  renderAnexoMultiModal();
+}
+function fecharAnexoMulti(){
+  ANEXO_MULTI_FILES.forEach(it=>{ if(it.url) URL.revokeObjectURL(it.url); });
+  ANEXO_MULTI_FILES = [];
+  closeModal();
+}
+async function confirmarAnexoMulti(){
+  const itens = ANEXO_MULTI_FILES.slice();
+  if(itens.length === 0) return;
+  closeModal();
+  const total = itens.length;
+  let ok = 0, falhas = 0;
+  toast(`Enviando 1/${total}…`);
+  for(let i=0;i<itens.length;i++){
+    const it = itens[i];
+    try{
+      const fd = new FormData();
+      fd.append("patientId", FICHA_ID);
+      fd.append("categoria", it.categoria);
+      fd.append("file", it.file);
+      const novo = await apiUpload("/anexos", fd);
+      FICHA_ANEXOS = [novo, ...FICHA_ANEXOS];
+      ok++;
+    }catch(e){ falhas++; }
+    if(it.url) URL.revokeObjectURL(it.url);
+    if(i < itens.length-1) toast(`Enviando ${i+2}/${total}…`);
+  }
+  ANEXO_MULTI_FILES = [];
   render();
   carregarThumbsAnexos();
-  toast("Arquivo anexado. 📎");
+  toast(falhas
+    ? `${ok} anexado${ok===1?"":"s"}, ${falhas} falhou${falhas===1?"":"aram"}.`
+    : `${ok} arquivo${ok===1?"":"s"} anexado${ok===1?"":"s"}. 📎`);
 }
 async function verAnexo(id){
   const r = await api("GET", `/anexos/${id}/url`);
