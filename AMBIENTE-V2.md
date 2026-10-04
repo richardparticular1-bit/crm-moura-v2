@@ -41,3 +41,13 @@ Permissões de administração da equipe, validação de vínculos entre clínic
 Backup clínico versão 2 inclui 20 conjuntos de registros e até 8 MiB de arquivos, recriando IDs e vínculos na restauração. Não inclui contas de acesso nem configuração da plataforma. Falhas desfazem os registros da importação; repetição do mesmo arquivo é recusada. Backups antigos são recusados porque o formato anterior omitia dados. A migração dos dados reais do original exige procedimento específico e ainda não foi executada.
 
 Validação automatizada: 17 testes Python em banco descartável e quatro casos JavaScript, incluindo preservação de vínculos e falha de Storage.
+
+## Ferramentas de migração
+
+prepare_migration.py monta um plano a partir do backup antigo e de um snapshot completo em leitura. execute_migration.py importa apenas em uma clínica sem dados clínicos, com o usuário crm_v2_app e cópias verificadas por SHA-256 através de uma Edge Function temporária. verify_migration.py confere totais, respostas de anamnese, documentos, anexo e logo pela API, revogando a sessão de diagnóstico ao terminar.
+
+Snapshots, plano, credenciais temporárias e relatórios privados ficam em .migration/, excluída do Git. A Edge Function deve ser desativada após a execução; o token temporário expira em uma hora. A origem é usada exclusivamente para leitura e cópia.
+
+A restauração remapeia também as perguntas no JSON de respostas de anamnese e as referências de consultas a orçamentos. A interface usa o caminho de logo salvo no cadastro, permitindo arquivos migrados para caminhos novos.
+
+Validação ampliada: 25 testes Python e quatro casos JavaScript.

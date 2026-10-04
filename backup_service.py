@@ -63,7 +63,7 @@ def include_files(data, download):
     return data
 
 
-def restore_records(db, clinic_id, data, upload, delete):
+def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, storage_prefix=None, before_commit=None):
     if data.get("backupVersion") != 2 or data.get("scope") != "clinical":
         raise HTTPException(422, "Backup antigo ou incompleto. Use um backup clínico versão 2; não importe dados reais com o formato antigo.")
     if any(name not in data or not isinstance(data[name], list) for name, _ in GROUPS):
@@ -83,12 +83,15 @@ def restore_records(db, clinic_id, data, upload, delete):
         raise HTTPException(409, "Este backup já foi importado nesta clínica.")
     paths = file_paths(data)
     files = data.get("files", {})
-    if paths and (not data.get("filesIncluded") or any(path not in files for path in paths)):
+    if external_copy is None and paths and (not data.get("filesIncluded") or any(path not in files for path in paths)):
         raise HTTPException(422, "O backup não contém todos os arquivos necessários.")
     decoded = {}
     total = 0
     try:
         for path in paths:
+            if external_copy is not None:
+                decoded[path] = None
+                continue
             payload = files[path]
             content = base64.b64decode(payload["content"], validate=True)
             total += len(content)
@@ -98,7 +101,10 @@ def restore_records(db, clinic_id, data, upload, delete):
     except (KeyError, ValueError, TypeError):
         raise HTTPException(422, "Conteúdo de arquivo inválido ou acima do limite.")
     # Os nomes de origem nunca são usados para escrever no bucket: gera caminhos novos.
-    path_map = {path: f"clinicas/{clinic_id}/imports/{secrets.token_hex(16)}" for path in paths}
+    prefix = storage_prefix or f"clinicas/{clinic_id}/imports"
+    if not prefix.startswith(f"clinicas/{clinic_id}/imports") or ".." in prefix:
+        raise HTTPException(422, "Prefixo de armazenamento inválido.")
+    path_map = {path: f"{prefix}/{secrets.token_hex(16)}" for path in paths}
     maps = {}
     objects = []
     uploaded = []
@@ -142,6 +148,18 @@ def restore_records(db, clinic_id, data, upload, delete):
                 maps[name][str(old_id)] = getattr(obj, primary.name)
                 objects.append((obj, origin))
         for obj, origin in objects:
+            if getattr(obj, "numOrcamento", None) and str(obj.numOrcamento) in maps.get("orcamentos", {}):
+                obj.numOrcamento = maps["orcamentos"][str(obj.numOrcamento)]
+            if isinstance(obj, models.AnamneseRemota) and obj.respostas:
+                answers = json.loads(obj.respostas)
+                if isinstance(answers.get("respostasClinicas"), dict):
+                    answers["respostasClinicas"] = {
+                        str(maps["anamnese_perguntas"].get(str(key), key)): value
+                        for key, value in answers["respostasClinicas"].items()
+                    }
+                if answers.get("modeloId") is not None:
+                    answers["modeloId"] = maps["anamnese_modelos"].get(str(answers["modeloId"]), answers["modeloId"])
+                obj.respostas = json.dumps(answers, ensure_ascii=False)
             if origin is not None:
                 if str(origin) not in maps["anexos"]:
                     raise HTTPException(422, "Origem de anexo inválida.")
@@ -160,9 +178,15 @@ def restore_records(db, clinic_id, data, upload, delete):
             else:
                 db.add(models.Config(clinicaId=clinic_id, key=key, value=str(value)))
         db.flush()
-        for path, (content, mime) in decoded.items():
+        for path, payload in decoded.items():
             uploaded.append(path_map[path])
-            upload(path_map[path], content, mime)
+            if external_copy is not None:
+                external_copy(path, path_map[path])
+            else:
+                content, mime = payload
+                upload(path_map[path], content, mime)
+        if before_commit is not None:
+            before_commit(db)
         db.add(models.Config(clinicaId=clinic_id, key=marker, value=datetime.now().isoformat()))
         db.commit()
         return {"ok": True, "patients": len(data["patients"]), "appointments": len(data["appointments"]),

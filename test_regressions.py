@@ -123,6 +123,31 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(db.get(m.Profissional, imported.profissionalId).clinicaId, 2)
             self.error(409, restore_records, db, 2, data, lambda *a: None, lambda *a: None)
 
+    def test_migration_preparation_recovers_missing_groups_without_importable_fake_files(self):
+        from prepare_migration import prepare
+        snapshot = self.backup()
+        legacy = copy.deepcopy(snapshot)
+        del legacy["odontograma_marcas"]
+        plan = prepare(legacy, snapshot)
+        self.assertEqual(plan["summary"]["dryRunRecordsAndLinks"], "passed")
+        self.assertFalse(plan["records"]["filesIncluded"])
+        self.assertEqual(plan["records"]["files"], {})
+        self.assertIn("odontograma_marcas", plan["summary"]["recoveredGroups"])
+
+    def test_migration_preparation_rejects_missing_storage_object(self):
+        from prepare_migration import prepare
+        snapshot = self.backup()
+        snapshot["patients"][0]["fotoPath"] = "missing.jpg"
+        with self.assertRaises(ValueError):
+            prepare(snapshot, snapshot)
+
+    def test_migration_preparation_rejects_mixed_clinics(self):
+        from prepare_migration import prepare
+        snapshot = self.backup()
+        snapshot["appointments"][0]["clinicaId"] = 2
+        with self.assertRaises(ValueError):
+            prepare(snapshot, snapshot)
+
     def test_every_clinical_group_roundtrips(self):
         from sqlalchemy import DateTime, Integer
         from datetime import datetime
@@ -185,6 +210,65 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertTrue(calls[0][0].startswith("clinicas/2/imports/"))
             self.assertEqual(calls[0][1], b"imagem")
+
+    def test_external_copy_is_internal_and_uses_new_paths(self):
+        data = self.backup()
+        data["patients"][0]["fotoPath"] = "source.jpg"
+        data["filesIncluded"] = False
+        copies = []
+        with self.sessions() as db:
+            result = restore_records(db, 2, data, lambda *_: self.fail("inline upload"), lambda _: None,
+                                     external_copy=lambda *args: copies.append(args),
+                                     storage_prefix="clinicas/2/imports/test-run")
+            self.assertEqual(result["files"], 1)
+            self.assertEqual(copies[0][0], "source.jpg")
+            self.assertTrue(copies[0][1].startswith("clinicas/2/imports/test-run/"))
+
+    def test_before_commit_failure_reverts_external_import(self):
+        data = self.backup()
+        data["patients"][0]["fotoPath"] = "source.jpg"
+        deleted = []
+        def fail(_):
+            raise ValueError("invalid clinic profile")
+        with self.sessions() as db:
+            self.error(422, lambda: restore_records(db, 2, data, lambda *_: None, deleted.append,
+                       external_copy=lambda *_: None, before_commit=fail))
+            self.assertEqual(db.query(m.Paciente).filter_by(clinicaId=2).count(), 1)
+            self.assertEqual(len(deleted), 1)
+
+    def test_migration_executor_rejects_nonempty_destination(self):
+        from execute_migration import execute
+        with self.assertRaises(ValueError):
+            execute({"records": self.backup()}, {"clinicId": 2}, self.sessions, None)
+
+    def test_nested_anamnese_answers_and_appointment_budget_are_remapped(self):
+        import json
+        with self.sessions() as db:
+            db.add(m.AnamneseModelo(id="model", clinicaId=1, nome="Modelo"))
+            db.add(m.Orcamento(id="budget", clinicaId=1, patientId="p1", data="2026-10-04"))
+            db.flush()
+            db.add(m.AnamnesePergunta(id="question", clinicaId=1, modeloId="model", texto="Pergunta"))
+            db.add(m.AnamneseRemota(id="answer", clinicaId=1, patientId="p1", modeloId="model", token="original-token",
+                   respostas=json.dumps({"modeloId": "model", "respostasClinicas": {"question": {"resposta": "sim"}}})))
+            db.get(m.Consulta, "a1").numOrcamento = "budget"
+            db.commit()
+        data = self.backup()
+        with self.sessions() as db:
+            restore_records(db, 2, data, lambda *_: None, lambda _: None)
+            answer = db.query(m.AnamneseRemota).filter_by(clinicaId=2).one()
+            question = db.query(m.AnamnesePergunta).filter_by(clinicaId=2).one()
+            budget = db.query(m.Orcamento).filter_by(clinicaId=2).one()
+            values = json.loads(answer.respostas)
+            self.assertEqual(values["modeloId"], answer.modeloId)
+            self.assertEqual(values["respostasClinicas"], {question.id: {"resposta": "sim"}})
+            self.assertEqual(db.query(m.Consulta).filter_by(clinicaId=2).one().numOrcamento, budget.id)
+
+    def test_clinic_logo_uses_saved_path_after_migration(self):
+        with self.sessions() as db:
+            db.get(m.Clinica, 1).logoPath = "clinicas/1/imports/logo"
+            db.commit()
+        with patch.object(main, "_sb_signed_url_or_none", lambda path, **_: path):
+            self.assertEqual(main.get_clinica(None)["logoUrl"], "clinicas/1/imports/logo")
 
     def test_storage_failure_rolls_back_and_cleans_uploaded_files(self):
         with self.sessions() as db:

@@ -1136,7 +1136,7 @@ def get_clinica(request: Request):
         c = db.get(Clinica, quem.clinicaId)
         if not c:
             raise HTTPException(404, "Clínica não encontrada.")
-        logo_url = _sb_signed_url_or_none(_path_logo_clinica(c.id), segundos=3600) if c.logoPath else None
+        logo_url = _sb_signed_url_or_none(c.logoPath, segundos=3600) if c.logoPath else None
         return {
             "nome": c.nome, "responsavelTecnico": c.responsavelTecnico, "croResponsavel": c.croResponsavel,
             "croUf": c.croUf, "cnpj": c.cnpj, "enderecoCompleto": c.enderecoCompleto, "telefoneWhatsapp": c.telefoneWhatsapp,
@@ -1524,7 +1524,7 @@ def get_consultorio_publico(token: str):
         c = db.query(Clinica).filter(Clinica.tokenInfo == token).first()
         if not c:
             raise HTTPException(404, "Link inválido.")
-        logo_url = _sb_signed_url_or_none(_path_logo_clinica(c.id), segundos=3600) if c.logoPath else None
+        logo_url = _sb_signed_url_or_none(c.logoPath, segundos=3600) if c.logoPath else None
         configs = {cfg.key: cfg.value for cfg in db.query(Config).filter(Config.clinicaId == c.id).all()}
         return {
             "nome": c.nome, "logoUrl": logo_url, "enderecoCompleto": c.enderecoCompleto,
