@@ -1,0 +1,56 @@
+/* Espaço amplo: a navegação ocupa o topo, deixando toda a largura para a clínica. */
+.app{flex-direction:column;min-height:100dvh}
+.side{position:relative;inset:auto;display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;gap:16px;width:100%;min-height:0;padding:18px 32px;overflow:visible;box-shadow:none;border-bottom:1px solid rgba(127,127,127,.18);z-index:40}
+.brand{display:flex;gap:10px;padding:0;border:0;flex:0 1 230px;min-width:0}
+.brand b{font-size:19px;font-weight:700;letter-spacing:-.4px;overflow-wrap:anywhere}
+.brand small{display:block;margin-top:4px;font-size:11px;letter-spacing:1px}
+.brand img{flex-shrink:0}
+nav.menu{position:relative;display:flex;flex-direction:row;align-items:center;gap:5px;padding:0;flex:1;flex-wrap:wrap}
+.nav-btn{flex:none;flex-direction:row;gap:8px;font-size:13px;padding:10px 12px;min-height:42px;border-radius:9px}
+.nav-btn svg{width:17px;height:17px}
+.nav-btn:focus-visible,.nav-more summary:focus-visible,.account-button:focus-visible{outline:2px solid currentColor;outline-offset:3px}
+.badge{position:static;margin-left:2px;background:#fbbf24;color:#17232d}
+.nav-more{position:relative;flex:none}
+.nav-more summary{display:flex;align-items:center;gap:8px;padding:10px 12px;min-height:42px;border-radius:9px;font-size:13px;cursor:pointer;list-style:none;color:var(--brand-sidebar-muted,var(--teal-300))}
+.nav-more summary::-webkit-details-marker{display:none}
+.nav-more[open] summary,.nav-more.is-active summary{background:var(--brand-primary,var(--teal-700));color:var(--brand-on-primary,#fff)}
+.nav-more summary svg{width:16px;height:16px}
+.nav-more-panel{position:absolute;right:0;top:calc(100% + 10px);width:320px;max-width:calc(100vw - 32px);padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 36px rgba(15,23,42,.14);z-index:45}
+.side .nav-more-panel .nav-btn{color:var(--mut);white-space:normal;text-align:left;justify-content:flex-start;font-size:12px;padding:10px}
+.side .nav-more-panel .nav-btn.on{background:var(--teal-100);color:var(--teal-800)}
+.nav-more-panel .badge{margin-left:auto}
+.account-button{display:flex;align-items:center;gap:9px;max-width:200px;padding:4px;color:var(--brand-on-sidebar,#fff);font-size:12px;min-height:42px;text-align:left}
+.account-button .account-name{max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.account-button .avatar{width:34px;height:34px;font-size:12px;background:var(--brand-primary,var(--teal-700));color:var(--brand-on-primary,#fff)}
+main{max-width:1440px;padding:34px 40px 48px;min-width:0}
+.hd{margin-bottom:26px;align-items:center;flex-wrap:wrap}
+.hd h1{font-size:28px;letter-spacing:-.7px;line-height:1.2}
+.hd p{font-size:14px;margin-top:8px}
+.grid{gap:16px}
+.card,.stat,.empty,.tg-wrap{border-radius:16px}
+.card{padding:22px}
+.card h2{font-size:16px;letter-spacing:-.2px;margin-bottom:16px}
+.row{padding:16px 0;gap:14px}
+.stat{padding:22px}
+.stat b{font-size:30px;letter-spacing:-.6px}
+.stat span{margin-top:7px;font-size:13px}
+.btn{min-height:42px;padding:10px 16px;border-radius:10px}
+.btn.sm{min-height:36px;padding:8px 12px}
+.btn svg{flex-shrink:0}
+.dashboard-panels{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:18px;align-items:start}
+.dashboard-stats{margin-bottom:22px}
+.panel-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+.panel-title h2{margin:0}
+.panel-link{color:var(--teal-700);font-size:13px;padding:8px 0}
+.actions-list li{padding:12px 0;border-bottom:1px solid var(--line);flex-wrap:wrap;line-height:1.5}
+.actions-list li:last-child{border:0}
+.actions-list b{width:20px}
+.actions-list span{flex:1;min-width:130px}
+.searchbar{margin-bottom:20px}
+.daynav{flex-wrap:wrap}
+input,select,textarea{padding:11px 13px}
+.toast{bottom:24px}
+.tg-scroll{max-height:calc(100dvh - 290px)}
+@media(max-width:1100px){.side{padding:16px 24px}.brand{flex-basis:180px}.account-button .account-name{display:none}main{padding:28px 24px 40px}.nav-btn{padding:10px}.dashboard-panels{grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr)}}
+@media(max-width:850px){nav.menu{order:3;flex-basis:100%}.account-button{margin-left:auto}.dashboard-panels{grid-template-columns:1fr}.nav-more{position:static}.nav-more-panel{right:0;left:auto}.tg-scroll{max-height:65dvh}}
+@media(max-width:600px){.side{padding:14px 16px;gap:12px}.brand{flex-basis:auto;flex:1}.brand b{font-size:17px}.brand small{font-size:10px}.nav-btn,.nav-more summary{font-size:12px;padding:9px 10px;min-height:44px}.nav-btn svg{width:16px;height:16px}.nav-more-panel{width:288px;left:auto;right:0}.nav-more-panel .nav-btn{min-height:44px}main{padding:24px 16px 32px}.hd{margin-bottom:20px}.hd h1{font-size:24px}.hd p{font-size:13px}.card{padding:18px}.stat{padding:16px}.stat b{font-size:26px}.g2,.g3{grid-template-columns:1fr}.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.btn,.btn.sm,.icon-btn{min-height:44px}.icon-btn{min-width:44px}.grid{gap:12px}.row{gap:10px}.dashboard-panels{gap:14px}.tg-scroll{min-height:320px}.toast{bottom:16px}}

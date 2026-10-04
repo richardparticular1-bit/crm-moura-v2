@@ -1,5 +1,5 @@
-const CACHE = "crm-moura-v5";
-const ASSETS = ["/", "/static/appearance.js", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
+const CACHE = "crm-moura-v6";
+const ASSETS = ["/", "/static/appearance.js", "/static/layout.css", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png"];
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).catch(() => {})
