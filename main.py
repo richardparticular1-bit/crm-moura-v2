@@ -55,7 +55,7 @@ VAPID_CLAIMS = {"sub": "mailto:contato@mouraodontologia.com.br"}
 # de clínica): confirmação de e-mail antes do primeiro acesso.
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
-APP_URL = os.environ.get("APP_URL", "https://crm-moura.onrender.com")
+APP_URL = (os.environ.get("APP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "http://127.0.0.1:8001").rstrip("/")
 
 # Cobrança recorrente da PLATAFORMA (assinatura de cada clínica), via Mercado
 # Pago Preapproval — só o Access Token da SUA conta Mercado Pago (a que recebe
