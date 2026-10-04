@@ -2742,6 +2742,12 @@ def get_settings(request: Request):
 @app.put("/api/settings")
 def save_settings(data: dict[str, str], request: Request):
     quem = _usuario_logado(request)
+    theme_keys = {"themePrimary", "themeSidebar", "themeBackground"}
+    if theme_keys.intersection(data):
+        if not (quem.isSuperAdmin or quem.isClinicaAdmin):
+            raise HTTPException(403, "Somente o administrador pode alterar a aparência da clínica.")
+        if any(not re.fullmatch(r"#[0-9a-fA-F]{6}", data[k]) for k in theme_keys.intersection(data)):
+            raise HTTPException(422, "Cor inválida. Use o formato #RRGGBB.")
     with SessionLocal() as db:
         for k, v in data.items():
             cfg = db.get(Config, (quem.clinicaId, k))

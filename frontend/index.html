@@ -180,6 +180,15 @@ a.link{color:var(--teal-700)}
 </div>
 <div class="toast" id="toast"></div>
 
+<script src="/static/appearance.js"></script>
+<style>
+.side{background:var(--brand-sidebar,var(--teal-900));color:var(--brand-on-sidebar,#fff)}
+.side .brand small,.side .nav-btn{color:var(--brand-sidebar-muted,var(--teal-300))}
+.side .nav-btn.on,.btn:not(.ghost):not(.whats):not(.danger):not(.danger-link){background:var(--brand-primary,var(--teal-700));color:var(--brand-on-primary,#fff)}
+main>.hd{color:var(--brand-page-ink,var(--ink))}main>.hd p{color:var(--brand-page-muted,var(--mut))}
+.appearance-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.appearance-fields input[type=color]{height:44px;padding:4px}
+</style>
 <script>
 "use strict";
 const API = window.location.origin + "/api";
@@ -383,6 +392,7 @@ async function reloadAll() {
     api("GET", "/anamnese-remota"),
   ]);
   DB = { patients, appointments, surveys, settings, profissionais, tarefas, aniversariantes, lancamentos, orcamentos, retornos, despesas, anamneseRemota, chat: DB.chat||[] };
+  ClinicAppearance.apply(settings);
   render();
 }
 
@@ -538,6 +548,7 @@ const NAV = [
 ];
 
 function go(tab){
+  ClinicAppearance.apply(DB.settings);
   TAB=tab;
   if(CHAT_POLL){ clearInterval(CHAT_POLL); CHAT_POLL=null; }
   if(tab==="chat"){
@@ -4830,10 +4841,52 @@ async function delProf(id){
 /* ════════════════════════════════════════════
    AJUSTES
 ════════════════════════════════════════════ */
+function vAppearance(settings){
+  const s=ClinicAppearance.normalize(settings),editable=AUTH_IS_CLINICAADMIN||AUTH_IS_SUPERADMIN;
+  return `<div class="card" style="margin-bottom:12px"><h2>Aparência da clínica</h2>
+    <p class="meta" style="margin-bottom:12px">As cores salvas são usadas por toda a equipe desta clínica.</p>
+    <label class="f"><span>Começar com uma paleta</span><select onchange="chooseAppearance(this.value)" ${editable?'':'disabled'}>
+      <option value="">Personalizada</option><option value="moura">Azul Moura</option><option value="suave">Azul suave</option><option value="original">Verde original</option>
+    </select></label>
+    <div class="appearance-fields">${[['themePrimary','Botões e destaques'],['themeSidebar','Menu de navegação'],['themeBackground','Fundo das telas']].map(([key,label])=>`
+      <label class="f"><span>${label}</span><input type="color" id="appearance-${key}" value="${s[key]}" oninput="previewAppearance()" ${editable?'':'disabled'}></label>`).join('')}</div>
+    ${editable?`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="saveAppearance(this)">Salvar aparência</button><button class="btn ghost" onclick="resetAppearance()">Descartar prévia</button></div>`:''}
+    <p class="meta" id="appearance-status" aria-live="polite" style="margin-top:10px">${editable?'Escolha as cores e confira a prévia antes de salvar.':'O administrador da clínica pode alterar estas cores.'}</p>
+  </div>`;
+}
+function appearanceValues(){
+  return Object.fromEntries(Object.keys(ClinicAppearance.defaults).map(k=>[k,document.getElementById('appearance-'+k).value]));
+}
+function previewAppearance(){
+  ClinicAppearance.apply(appearanceValues());
+  document.getElementById('appearance-status').textContent='Prévia neste dispositivo. Salve para aplicar à clínica.';
+}
+function fillAppearance(values){
+  for(const [k,v] of Object.entries(ClinicAppearance.normalize(values)))document.getElementById('appearance-'+k).value=v;
+}
+function chooseAppearance(name){
+  if(!ClinicAppearance.presets[name])return;
+  fillAppearance(ClinicAppearance.presets[name]);previewAppearance();
+}
+function resetAppearance(){
+  fillAppearance(DB.settings);ClinicAppearance.apply(DB.settings);
+  document.getElementById('appearance-status').textContent='Cores salvas restauradas. Nenhuma alteração foi feita.';
+}
+async function saveAppearance(button){
+  const colors=appearanceValues();button.disabled=true;
+  try{
+    await api('PUT','/settings',colors);
+    Object.assign(DB.settings,colors);ClinicAppearance.apply(DB.settings);
+    document.getElementById('appearance-status').textContent='Aparência salva para esta clínica.';
+    toast('Aparência da clínica salva.');
+  }catch(e){ClinicAppearance.apply(DB.settings);}
+  finally{button.disabled=false;}
+}
 function vSettings(){
   const s=DB.settings;
   const notifAtivas = s.notifAtivas !== "false";
   return header("Ajustes","Configurações gerais e modelos de mensagem.")+`
+  ${vAppearance(s)}
   <div class="card" style="margin-bottom:12px"><h2>Conta e equipe 🔐</h2>
     <div class="row" style="border:none;padding:0">
       <div class="avatar">${initials(AUTH_NOME)}</div>
@@ -5135,6 +5188,7 @@ async function testPush(){
 ════════════════════════════════════════════ */
 let LOGIN_MODE = "login"; // login | signup
 async function showLogin(){
+  ClinicAppearance.apply();
   document.getElementById("login-screen")?.remove();
   let setup = false;
   try { const s = await fetch(API + "/auth/status").then(r=>r.json()); setup = !!s.setup; } catch(e){}
@@ -5262,6 +5316,7 @@ async function resendVerification(email){
   }catch(e){ /* toast já exibido pelo api() */ }
 }
 async function logout(){
+  ClinicAppearance.apply();
   try{ await api("POST","/auth/logout"); }catch(e){}
   AUTH_TOKEN=""; AUTH_NOME=""; AUTH_IS_SUPERADMIN=false; AUTH_IS_CLINICAADMIN=false;
   MINHA_CLINICA = { nome:"", responsavelTecnico:"", croResponsavel:"", cnpj:"", enderecoCompleto:"", telefoneWhatsapp:"", email:"", logoUrl:null };

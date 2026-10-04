@@ -13,6 +13,22 @@ from backup_service import GROUPS, export_records, include_files, restore_record
 
 
 class RegressionTests(unittest.TestCase):
+    def test_appearance_settings_are_isolated_by_clinic(self):
+        main.save_settings({"themePrimary": "#29a8f5"}, None)
+        self.assertEqual(main.get_settings(None)["themePrimary"], "#29a8f5")
+        self.who.clinicaId = 2
+        self.assertNotIn("themePrimary", main.get_settings(None))
+        main.save_settings({"themePrimary": "#ff0000"}, None)
+        self.who.clinicaId = 1
+        self.assertEqual(main.get_settings(None)["themePrimary"], "#29a8f5")
+
+    def test_appearance_requires_admin_and_valid_colors(self):
+        self.error(422, main.save_settings, {"themePrimary": "red;display:none"}, None)
+        self.assertNotIn("themePrimary", main.get_settings(None))
+        self.who.isSuperAdmin = False
+        self.who.isClinicaAdmin = False
+        self.error(403, main.save_settings, {"themeSidebar": "#000000"}, None)
+
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
         @event.listens_for(self.engine, "connect")
