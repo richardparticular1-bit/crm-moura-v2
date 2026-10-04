@@ -63,7 +63,7 @@ def include_files(data, download):
     return data
 
 
-def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, storage_prefix=None, before_commit=None):
+def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, storage_prefix=None, before_commit=None, dry_run=False):
     if data.get("backupVersion") != 2 or data.get("scope") != "clinical":
         raise HTTPException(422, "Backup antigo ou incompleto. Use um backup clínico versão 2; não importe dados reais com o formato antigo.")
     if any(name not in data or not isinstance(data[name], list) for name, _ in GROUPS):
@@ -78,7 +78,7 @@ def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, 
                    for key, value in row.items() if key.endswith("Path") and value)):
         raise HTTPException(422, "Estrutura de backup inválida.")
     digest = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    marker = "_import_" + digest
+    marker = "_import_" + digest[:48]  # settings.key tem limite de 60 caracteres
     if db.get(models.Config, (clinic_id, marker)):
         raise HTTPException(409, "Este backup já foi importado nesta clínica.")
     paths = file_paths(data)
@@ -144,9 +144,11 @@ def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, 
                 origin = values.pop("origemId", None)
                 obj = model(**values, clinicaId=clinic_id)
                 db.add(obj)
-                db.flush()
+                if isinstance(primary.type, Integer):
+                    db.flush()
                 maps[name][str(old_id)] = getattr(obj, primary.name)
                 objects.append((obj, origin))
+            db.flush()
         for obj, origin in objects:
             if getattr(obj, "numOrcamento", None) and str(obj.numOrcamento) in maps.get("orcamentos", {}):
                 obj.numOrcamento = maps["orcamentos"][str(obj.numOrcamento)]
@@ -177,6 +179,7 @@ def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, 
                 cfg.value = str(value)
             else:
                 db.add(models.Config(clinicaId=clinic_id, key=key, value=str(value)))
+        db.add(models.Config(clinicaId=clinic_id, key=marker, value=datetime.now().isoformat()))
         db.flush()
         for path, payload in decoded.items():
             uploaded.append(path_map[path])
@@ -187,8 +190,11 @@ def restore_records(db, clinic_id, data, upload, delete, *, external_copy=None, 
                 upload(path_map[path], content, mime)
         if before_commit is not None:
             before_commit(db)
-        db.add(models.Config(clinicaId=clinic_id, key=marker, value=datetime.now().isoformat()))
-        db.commit()
+        db.flush()
+        if dry_run:
+            db.rollback()
+        else:
+            db.commit()
         return {"ok": True, "patients": len(data["patients"]), "appointments": len(data["appointments"]),
                 "records": sum(len(data[name]) for name, _ in GROUPS), "files": len(uploaded)}
     except Exception as exc:

@@ -270,6 +270,15 @@ class RegressionTests(unittest.TestCase):
         with patch.object(main, "_sb_signed_url_or_none", lambda path, **_: path):
             self.assertEqual(main.get_clinica(None)["logoUrl"], "clinicas/1/imports/logo")
 
+    def test_import_marker_fits_postgres_column_and_dry_run_rolls_back(self):
+        data = self.backup()
+        with self.sessions() as db:
+            restore_records(db, 2, data, lambda *_: None, lambda _: None, dry_run=True)
+            self.assertEqual(db.query(m.Paciente).filter_by(clinicaId=2).count(), 1)
+            restore_records(db, 2, data, lambda *_: None, lambda _: None)
+            marker = db.query(m.Config).filter(m.Config.clinicaId == 2, m.Config.key.like("_import_%")).one()
+            self.assertLessEqual(len(marker.key), m.Config.__table__.c.key.type.length)
+
     def test_storage_failure_rolls_back_and_cleans_uploaded_files(self):
         with self.sessions() as db:
             db.get(m.Paciente, "p1").fotoPath = "_fotos/1/p1.jpg"

@@ -68,7 +68,7 @@ class StorageBridge:
             self.request(source, destination, "delete")
 
 
-def execute(plan, config, sessions, bridge):
+def execute(plan, config, sessions, bridge, *, dry_run=False):
     clinic_id = config["clinicId"]
     profile = plan.get("clinicProfile", {})
     extra_path = None
@@ -91,7 +91,7 @@ def execute(plan, config, sessions, bridge):
                       "telefoneWhatsapp", "email", "cidade", "chavePix", "tipoChavePix")
             for field in fields:
                 if field in profile:
-                    setattr(clinic, field, profile[field])
+                    setattr(clinic, field, profile[field] or "")
             if profile.get("logoPath"):
                 extra_path = f"clinicas/{clinic_id}/imports/{config['runId']}/{secrets.token_hex(16)}"
                 bridge.schedule(profile["logoPath"], extra_path)
@@ -104,16 +104,19 @@ def execute(plan, config, sessions, bridge):
                 for user in transaction.query(models.Usuario).filter_by(clinicaId=clinic_id, isClinicaAdmin=True):
                     if user.profissionalId is None:
                         user.profissionalId = prof.id
+            transaction.flush()
 
         try:
             result = restore_records(db, clinic_id, plan["records"], lambda *_: None, bridge.delete,
                                      external_copy=bridge.schedule,
                                      storage_prefix=f"clinicas/{clinic_id}/imports/{config['runId']}",
-                                     before_commit=before_commit)
+                                     before_commit=before_commit, dry_run=dry_run)
         except Exception:
             if extra_path:
                 bridge.delete(extra_path)
             raise
+        if dry_run:
+            return {"status": "dry_run_passed", "records": result["records"]}
         actual = {name: db.query(model).filter_by(clinicaId=clinic_id).count() for name, model in GROUPS}
         if actual != plan["summary"]["counts"]:
             raise RuntimeError("Totais divergentes após commit; requer revisão.")
@@ -125,6 +128,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, default=Path(".migration/plan.json"))
     parser.add_argument("--config", type=Path, default=Path(".migration/bridge-config.json"))
+    parser.add_argument("--dry-run", action="store_true", help="Valida e desfaz a transação, sem copiar arquivos.")
     args = parser.parse_args()
     for line in Path(".env.v2").read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#") and "=" in line:
@@ -134,6 +138,15 @@ def main():
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
     config = json.loads(args.config.read_text(encoding="utf-8"))
     report_path = args.plan.parent / "execution-report.json"
+    if args.dry_run:
+        class DryRunBridge:
+            copied = {}
+            def schedule(self, *_): pass
+            def finish(self): pass
+            def delete(self, *_): pass
+        result = execute(plan, config, SessionLocal, DryRunBridge(), dry_run=True)
+        print(f"Transação PostgreSQL validada e desfeita: {result['records']} registros; nenhum arquivo copiado.", flush=True)
+        return
     bridge = StorageBridge(config, report_path)
     report = execute(plan, config, SessionLocal, bridge)
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
