@@ -1,11 +1,15 @@
 """Conexão com o banco do CRM."""
 import os
+import re
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from models import Base
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+DATABASE_SCHEMA = os.environ.get("DATABASE_SCHEMA", "crm_v2")
+if not re.fullmatch(r"[a-z_][a-z0-9_]*", DATABASE_SCHEMA):
+    raise RuntimeError("DATABASE_SCHEMA inválido.")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -22,7 +26,13 @@ if DATABASE_URL:
     # pool_pre_ping: testa a conexão antes de usar, evitando erros esporádicos
     # de "server closed the connection unexpectedly" com o pooler do Supabase.
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-    print(f"[DB] Usando Postgres: {DATABASE_URL.split('@')[-1]}")  # só host, sem senha
+    engine = engine.execution_options(schema_translate_map={None: DATABASE_SCHEMA})
+    with engine.connect() as connection:
+        if connection.scalar(text("SELECT current_user")) != "crm_v2_app":
+            raise RuntimeError("A v2 exige o usuário de banco exclusivo crm_v2_app.")
+        if not connection.scalar(text("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :schema)"), {"schema": DATABASE_SCHEMA}):
+            raise RuntimeError("O schema da v2 precisa ser provisionado antes de iniciar.")
+    print(f"[DB] Postgres configurado no schema {DATABASE_SCHEMA}")
 else:
     if os.environ.get("RENDER"):
         DB_PATH = Path("/tmp/crm.db")

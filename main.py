@@ -2861,7 +2861,9 @@ def checar_consultas_proximas():
 # ══════════════════════════════════════════════════════════════════════════════
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-ANEXO_BUCKET = "prontuarios"
+ANEXO_BUCKET = os.environ.get("SUPABASE_BUCKET", "prontuarios-v2")
+if os.environ.get("RENDER") and ANEXO_BUCKET != "prontuarios-v2":
+    raise RuntimeError("A v2 exige o bucket separado prontuarios-v2.")
 ANEXO_MAX_BYTES = 15 * 1024 * 1024  # 15 MB
 ANEXO_MIMES = {
     "image/jpeg", "image/png", "image/webp", "image/gif",

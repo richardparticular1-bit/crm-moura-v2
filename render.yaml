@@ -13,6 +13,12 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.12"
       - key: DATABASE_URL
-        fromDatabase:
-          name: crm-moura-v2-db
-          property: connectionString
+        sync: false
+      - key: DATABASE_SCHEMA
+        value: crm_v2
+      - key: SUPABASE_URL
+        value: https://ahunkumobdexrcrrppvs.supabase.co
+      - key: SUPABASE_BUCKET
+        value: prontuarios-v2
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
