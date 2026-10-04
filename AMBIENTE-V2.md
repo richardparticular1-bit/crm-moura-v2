@@ -38,7 +38,7 @@ Advisors informou ausência de políticas RLS na v2, esperado para acesso exclus
 
 Permissões de administração da equipe, validação de vínculos entre clínica/paciente/consulta, recebimentos positivos, preservação de históricos na exclusão e escape de valores em eventos do frontend.
 
-Backup clínico versão 2 inclui 20 conjuntos de registros e até 8 MiB de arquivos, recriando IDs e vínculos na restauração. Não inclui contas de acesso nem configuração da plataforma. Falhas desfazem os registros da importação; repetição do mesmo arquivo é recusada. Backups antigos são recusados porque o formato anterior omitia dados. A migração dos dados reais do original exige procedimento específico e ainda não foi executada.
+Backup clínico versão 2 inclui 20 conjuntos de registros e até 8 MiB de arquivos, recriando IDs e vínculos na restauração. Não inclui contas de acesso nem configuração da plataforma. Falhas desfazem os registros da importação; repetição do mesmo arquivo é recusada. Backups antigos são recusados porque o formato anterior omitia dados. A migração dos dados reais foi concluída em 04/10/2026 pela ferramenta específica.
 
 Validação automatizada: 17 testes Python em banco descartável e quatro casos JavaScript, incluindo preservação de vínculos e falha de Storage.
 
@@ -50,4 +50,12 @@ Snapshots, plano, credenciais temporárias e relatórios privados ficam em .migr
 
 A restauração remapeia também as perguntas no JSON de respostas de anamnese e as referências de consultas a orçamentos. A interface usa o caminho de logo salvo no cadastro, permitindo arquivos migrados para caminhos novos.
 
-Validação ampliada: 25 testes Python e quatro casos JavaScript.
+Validação ampliada: 26 testes Python, quatro casos JavaScript e validação da transação completa no PostgreSQL antes do commit definitivo.
+
+## Migração concluída
+
+Foram importados 532 registros: 118 pacientes, 31 consultas, 57 lançamentos financeiros, 216 anexos e os conjuntos clínicos complementares. Foram copiados 227 arquivos, incluindo assinaturas e logo, com comparação SHA-256 da origem e do destino. A conta de acesso da v2 foi preservada; senhas e sessões do original não foram copiadas.
+
+A API confirmou pacientes e consultas, leitura de anexo, documento, todas as cinco anamneses e logo. A sessão temporária de diagnóstico foi revogada. A Edge Function de cópia foi substituída por uma função inerte (410) com verificação de JWT habilitada. O original permanece com 532 registros clínicos e 236 objetos no bucket; a v2 tem 228 objetos, contando o backup anterior.
+
+O volume migrado supera o limite de 8 MiB de arquivos do backup JSON atual. Esse botão recusa o volume completo; um backup completo exige exportação separada dos arquivos e dos registros. Essa melhoria ainda não foi implementada.

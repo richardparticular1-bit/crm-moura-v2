@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -38,7 +38,8 @@ def main():
         admin = db.query(models.Usuario).filter_by(clinicaId=1, ativo=True, isClinicaAdmin=True).first()
         if not admin:
             raise ValueError("Administrador não encontrado.")
-        db.add(models.Sessao(token=token, usuarioId=admin.id, expiresAt=datetime.now()+timedelta(minutes=10)))
+        db.add(models.Sessao(token=token, usuarioId=admin.id,
+                            expiresAt=datetime.now(timezone.utc).replace(tzinfo=None)+timedelta(minutes=10)))
         db.commit()
         sample_anexo = db.query(models.Anexo).filter_by(clinicaId=1).first().id
         sample_doc = db.query(models.DocumentoEmitido).filter_by(clinicaId=1).first().id
