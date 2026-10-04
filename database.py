@@ -12,6 +12,8 @@ if not re.fullmatch(r"[a-z_][a-z0-9_]*", DATABASE_SCHEMA):
     raise RuntimeError("DATABASE_SCHEMA inválido.")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 # Segurança: no Render, subir sem DATABASE_URL significaria usar SQLite em /tmp,
 # que é apagado a cada restart/deploy — perda silenciosa de dados de produção.
