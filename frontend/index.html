@@ -251,6 +251,7 @@ let PUSH_SUBSCRIBED = false;
 let AUTH_TOKEN = localStorage.getItem("crm_token") || "";
 let AUTH_NOME = localStorage.getItem("crm_nome") || "";
 let AUTH_IS_SUPERADMIN = false;
+let AUTH_IS_CLINICAADMIN = false;
 
 /* ── marca (plataforma = neutra, exibida antes do login; clínica = a do usuário logado) ── */
 let PLATAFORMA = { nome: "OdontoDesk", logoUrl: null };
@@ -344,6 +345,7 @@ async function carregarMinhaClinica(){
   try{
     const [me, c, assin] = await Promise.all([ api("GET","/auth/me"), api("GET","/clinica"), api("GET","/minha-assinatura") ]);
     AUTH_IS_SUPERADMIN = !!me.isSuperAdmin;
+    AUTH_IS_CLINICAADMIN = !!me.isClinicaAdmin || AUTH_IS_SUPERADMIN;
     MINHA_CLINICA = {
       nome: c.nome || "", responsavelTecnico: c.responsavelTecnico || "", croResponsavel: c.croResponsavel || "",
       croUf: c.croUf || "", cnpj: c.cnpj || "", enderecoCompleto: c.enderecoCompleto || "", telefoneWhatsapp: c.telefoneWhatsapp || "",
@@ -467,6 +469,8 @@ function monthsAgo(n){ const d=new Date(); d.setMonth(d.getMonth()-n); return d.
 function wa(phone,msg){ let p=digits(phone); if(p.length<=11) p="55"+p; return "https://wa.me/"+p+"?text="+encodeURIComponent(msg); }
 function fill(t,vars){ let o=t; for(const k in vars) o=o.split("{"+k+"}").join(vars[k]??""); return o; }
 function esc(s){ return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+// Strings usadas em eventos HTML precisam de escape JavaScript, além do HTML.
+function escJS(s){ return String(s??"").split("").map(c=>"\\u"+c.charCodeAt(0).toString(16).padStart(4,"0")).join(""); }
 const pById = id => DB.patients.find(p=>p.id===id);
 const pName = id => pById(id)?.name || "Paciente removido";
 const profById = id => DB.profissionais.find(p=>p.id===id);
@@ -552,7 +556,7 @@ function render(){
   const C = calc();
   document.getElementById("nav").innerHTML = NAV.filter(n=>!n.superadmin || AUTH_IS_SUPERADMIN).map(n=>{
     const b = n.badge && C.badges[n.badge]>0 ? `<span class="badge">${C.badges[n.badge]}</span>` : "";
-    return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${n.id}')">${n.ic}<span>${n.label}</span>${b}</button>`;
+    return `<button class="nav-btn ${TAB===n.id?"on":""}" onclick="go('${escJS(n.id)}')">${n.ic}<span>${n.label}</span>${b}</button>`;
   }).join("");
   const views = { dash:vDash, patients:vPatients, agenda:vAgenda, financeiro:vFinanceiro, orcamentos:vOrcamentos, gastos:vGastos, ficha:vFicha, confirm:vConfirm, reactivate:vReactivate,
     retornos:vRetornos, relatorios:vRelatorios, anamnese:vAnamneseRemota, clinicas:vClinicas, feedback:vFeedbackAdmin,
@@ -568,7 +572,7 @@ function render(){
 ════════════════════════════════════════════ */
 function vDash(C){
   const todayAppts = DB.appointments.filter(a=>a.date===C.t && a.status!=="cancelado").sort((a,b)=>a.time.localeCompare(b.time));
-  const act=(n,txt,tab)=>`<li><b class="${n?"":"zero"}">${n}</b><span style="${n?"":"color:#94a3b8"}">${txt}</span>${n?`<button class="go" onclick="go('${tab}')">Resolver →</button>`:""}</li>`;
+  const act=(n,txt,tab)=>`<li><b class="${n?"":"zero"}">${n}</b><span style="${n?"":"color:#94a3b8"}">${txt}</span>${n?`<button class="go" onclick="go('${escJS(tab)}')">Resolver →</button>`:""}</li>`;
   const bdayBanner = DB.aniversariantes.length ? `
     <div class="bday-banner">
       <div class="emoji">🎂</div>
@@ -645,12 +649,12 @@ function vPatients(){
         <div style="font-weight:500;font-size:14px">${esc(p.name)}${isBday?' <span style="color:#d97706;font-size:12px">Aniversário hoje!</span>':""}</div>
         <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${p.cpf?" · CPF: "+esc(p.cpf):""} · Última visita: ${fmtDate(p.lastVisit)}</div>
       </div>
-      ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${p.id}')">${IC.send} Parabéns</button>` : ""}
-      <button class="icon-btn" onclick="abrirMensagemRapida('${p.id}')" aria-label="Enviar mensagem" title="Enviar mensagem no WhatsApp">${IC.send}</button>
-      <button class="btn ghost sm" onclick="openFicha('${p.id}')">📋 Prontuário</button>
-      <button class="icon-btn" onclick="agendarPaciente('${p.id}')" aria-label="Agendar consulta" title="Agendar consulta">${IC.cal}</button>
-      <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar">${IC.pencil}</button>
-      <button class="icon-btn del" onclick="delPatient('${p.id}')" aria-label="Excluir">${IC.trash}</button>
+      ${isBday && p.phone ? `<button class="btn sm" style="background:#d97706" onclick="sendBirthday('${escJS(p.id)}')">${IC.send} Parabéns</button>` : ""}
+      <button class="icon-btn" onclick="abrirMensagemRapida('${escJS(p.id)}')" aria-label="Enviar mensagem" title="Enviar mensagem no WhatsApp">${IC.send}</button>
+      <button class="btn ghost sm" onclick="openFicha('${escJS(p.id)}')">📋 Prontuário</button>
+      <button class="icon-btn" onclick="agendarPaciente('${escJS(p.id)}')" aria-label="Agendar consulta" title="Agendar consulta">${IC.cal}</button>
+      <button class="icon-btn" onclick="openPatientForm('${escJS(p.id)}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delPatient('${escJS(p.id)}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
   }).join("")+`</div>`}`;
 }
@@ -673,7 +677,7 @@ function abrirMensagemRapida(pid){
   modal(`Enviar mensagem — ${esc(p.name)}`, `
     <label class="f"><span>Mensagem</span><textarea id="mr-texto" rows="4" placeholder="Digite a mensagem…"></textarea></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn whats" onclick="enviarMensagemRapida('${pid}')">${IC.send} Enviar no WhatsApp</button></div>`);
+    <button class="btn whats" onclick="enviarMensagemRapida('${escJS(pid)}')">${IC.send} Enviar no WhatsApp</button></div>`);
   setTimeout(()=>document.getElementById("mr-texto")?.focus(), 50);
 }
 function enviarMensagemRapida(pid){
@@ -777,7 +781,7 @@ async function savePatient(id){
 ════════════════════════════════════════════ */
 function vAgenda(){
   const viewBtns = ["dia","semana","mes","ano"].map(v=>
-    `<button class="btn ${AGENDA_VIEW===v?"":"ghost"} sm" onclick="AGENDA_VIEW='${v}';render()" style="text-transform:capitalize">${v}</button>`
+    `<button class="btn ${AGENDA_VIEW===v?"":"ghost"} sm" onclick="AGENDA_VIEW='${escJS(v)}';render()" style="text-transform:capitalize">${v}</button>`
   ).join("");
   const buscando = AGENDA_SEARCH.trim().length >= 2;
   const body = buscando ? vAgendaBusca() :
@@ -812,9 +816,9 @@ function vAgendaBusca(){
         <div class="meta">${esc(a.procedure)}${prof?` · <span style="color:${prof.cor}">● ${esc(prof.nome)}</span>`:""}</div>
       </div>
       ${pill(a.status)}
-      <button class="btn ghost sm" onclick="AGENDA_SEARCH='';AGENDA_DAY='${a.date}';AGENDA_VIEW='dia';render()">Ver dia</button>
-      <button class="icon-btn" onclick="openApptForm('${a.id}')" aria-label="Editar">${IC.pencil}</button>
-      <button class="icon-btn del" onclick="delAppt('${a.id}')" aria-label="Excluir">${IC.trash}</button>
+      <button class="btn ghost sm" onclick="AGENDA_SEARCH='';AGENDA_DAY='${escJS(a.date)}';AGENDA_VIEW='dia';render()">Ver dia</button>
+      <button class="icon-btn" onclick="openApptForm('${escJS(a.id)}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delAppt('${escJS(a.id)}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
   };
   return `
@@ -829,7 +833,7 @@ function vAgendaDia(){
     <input type="date" value="${AGENDA_DAY}" onchange="AGENDA_DAY=this.value;render()">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="AGENDA_DAY=addDays(AGENDA_DAY,1);render()">${IC.right}</button>
     <button style="color:var(--teal-700);font-weight:600;font-size:14px" onclick="AGENDA_DAY=todayISO();render()">Hoje</button>
-    ${appts.length?`<button class="btn ghost sm" style="margin-left:auto" onclick="gerarCarteirinhasLote('${AGENDA_DAY}')">🪪 Carteirinhas do dia</button>`:""}
+    ${appts.length?`<button class="btn ghost sm" style="margin-left:auto" onclick="gerarCarteirinhasLote('${escJS(AGENDA_DAY)}')">🪪 Carteirinhas do dia</button>`:""}
   </div>
   ${DB.patients.length===0?empty("Cadastre um paciente antes de criar consultas."):
     appts.length===0?empty("Nenhuma consulta em "+fmtDate(AGENDA_DAY)+"."):
@@ -847,11 +851,11 @@ function vAgendaDia(){
         </div>
       </div>
       ${pill(a.status)}
-      <select style="width:auto;font-size:12px;padding:6px 8px" onchange="setApptStatus('${a.id}',this.value)">
+      <select style="width:auto;font-size:12px;padding:6px 8px" onchange="setApptStatus('${escJS(a.id)}',this.value)">
         ${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}
       </select>
-      <button class="icon-btn" onclick="openApptForm('${a.id}')" aria-label="Editar">${IC.pencil}</button>
-      <button class="icon-btn del" onclick="delAppt('${a.id}')">${IC.trash}</button>
+      <button class="icon-btn" onclick="openApptForm('${escJS(a.id)}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delAppt('${escJS(a.id)}')">${IC.trash}</button>
     </div>`;
   }).join("")+`</div>`}`;
 }
@@ -951,10 +955,10 @@ function vAgendaSemana(){
     const shade = `<div class="tg-shade" style="top:${(12*60-iniMin)*TG_PX_MIN}px;height:${60*TG_PX_MIN}px"></div>`;
     const nowLine = (d===t && nowMin>=iniMin && nowMin<=fimMin)
       ? `<div class="tg-now" id="tg-now-line" style="top:${(nowMin-iniMin)*TG_PX_MIN}px"></div>` : "";
-    return `<div class="tg-col ${i===0?"dom":""}" data-date="${d}" style="height:${colH}px" onclick="tgSlotClick(event,'${d}')">${linhasHTML}${shade}${blocos}${nowLine}</div>`;
+    return `<div class="tg-col ${i===0?"dom":""}" data-date="${d}" style="height:${colH}px" onclick="tgSlotClick(event,'${escJS(d)}')">${linhasHTML}${shade}${blocos}${nowLine}</div>`;
   }).join("");
   const headHTML = days.map((d,i)=>{
-    return `<div class="tg-hcell ${d===t?"today":""}" onclick="AGENDA_DAY='${d}';AGENDA_VIEW='dia';render()" title="Abrir o dia ${fmtDate(d)}">
+    return `<div class="tg-hcell ${d===t?"today":""}" onclick="AGENDA_DAY='${escJS(d)}';AGENDA_VIEW='dia';render()" title="Abrir o dia ${fmtDate(d)}">
       <div class="dow">${dowNames[i]}</div><div class="dnum">${d.slice(8)}</div>
     </div>`;
   }).join("");
@@ -1151,7 +1155,7 @@ function vAgendaMes(){
       const iso = `${y}-${String(m).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
       const count = DB.appointments.filter(a=>a.date===iso && a.status!=="cancelado").length;
       const isToday = iso===t;
-      return `<button onclick="AGENDA_DAY='${iso}';AGENDA_VIEW='dia';render()" class="card" style="padding:8px 4px;min-height:54px;text-align:center;cursor:pointer;${isToday?"border-color:var(--teal-700);border-width:2px":""}">
+      return `<button onclick="AGENDA_DAY='${escJS(iso)}';AGENDA_VIEW='dia';render()" class="card" style="padding:8px 4px;min-height:54px;text-align:center;cursor:pointer;${isToday?"border-color:var(--teal-700);border-width:2px":""}">
         <div style="font-size:12px;font-weight:${isToday?"700":"500"};color:${isToday?"var(--teal-700)":"var(--ink)"}">${day}</div>
         ${count>0?`<div style="margin-top:3px;font-size:10px;background:var(--teal-100);color:var(--teal-800);border-radius:99px;padding:1px 6px;display:inline-block">${count}</div>`:""}
       </button>`;
@@ -1220,12 +1224,12 @@ function agendarPaciente(pid){
     <div style="margin-bottom:6px">
       ${futuras.map(a=>`<div class="row" style="padding:8px 0">
         <div class="grow"><b style="font-size:13.5px">${fmtDate(a.date)} às ${a.time}</b><div class="meta">${esc(a.procedure||"")}${a.profissionalNome?" · "+esc(a.profissionalNome):""}</div></div>
-        <button class="btn ghost sm" onclick="closeModal();openApptForm('${a.id}')">Ver/editar</button>
+        <button class="btn ghost sm" onclick="closeModal();openApptForm('${escJS(a.id)}')">Ver/editar</button>
       </div>`).join("")}
     </div>
     <div class="acts">
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn" onclick="closeModal();openApptForm(null,'${pid}')">Agendar mesmo assim</button>
+      <button class="btn" onclick="closeModal();openApptForm(null,'${escJS(pid)}')">Agendar mesmo assim</button>
     </div>`);
 }
 function openApptForm(id, patientId, presetDate, presetTime){
@@ -1251,7 +1255,7 @@ function openApptForm(id, patientId, presetDate, presetTime){
     </div>
     ${a?`<label class="f"><span>Status</span><select id="a-status">${Object.entries(STATUS).map(([k,v])=>`<option value="${k}" ${a.status===k?"selected":""}>${v}</option>`).join("")}</select></label>`:""}
     <div class="acts" style="justify-content:space-between">
-    ${a?`<button class="btn ghost" onclick="closeModal();openLancForm(null,'${a.id}')" style="color:var(--green);border-color:#a7f3d0">💰 Gerar cobrança</button>`:"<span></span>"}
+    ${a?`<button class="btn ghost" onclick="closeModal();openLancForm(null,'${escJS(a.id)}')" style="color:var(--green);border-color:#a7f3d0">💰 Gerar cobrança</button>`:"<span></span>"}
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="saveAppt('${id||""}')">${a?"Salvar alterações":"Agendar"}</button></div></div>`);
 }
@@ -1315,7 +1319,7 @@ function vFinanceiro(C){
     return (b.pagoEm||b.vencimento).localeCompare(a.pagoEm||a.vencimento);
   });
   const filtros = [["abertos","Em aberto"],["vencidos","Vencidos"],["pagos","Pagos"],["todos","Todos"]].map(([k,lab])=>
-    `<button class="btn ${FIN_FILTRO===k?"":"ghost"} sm" onclick="FIN_FILTRO='${k}';render()">${lab}</button>`).join("");
+    `<button class="btn ${FIN_FILTRO===k?"":"ghost"} sm" onclick="FIN_FILTRO='${escJS(k)}';render()">${lab}</button>`).join("");
   const rowHTML = l=>{
     const vencido = !l.pagoEm && l.vencimento < t;
     return `<div class="row">
@@ -1329,10 +1333,10 @@ function vFinanceiro(C){
       </div>
       ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:vencido?`<span class="pill p-faltou">Vencido</span>`:`<span class="pill p-agendado">Em aberto</span>`}
       ${l.pagoEm
-        ? `<button class="btn ghost sm" onclick="estornarLanc('${l.id}')">Estornar</button><button class="icon-btn" onclick="abrirReciboForm('${l.patientId}','${l.id}')" title="Emitir recibo">🧾</button>`
-        : `<button class="btn sm" style="background:var(--green)" onclick="openReceberForm('${l.id}')">Receber</button>`}
-      <button class="icon-btn" onclick="openLancForm('${l.id}')" aria-label="Editar">${IC.pencil}</button>
-      <button class="icon-btn del" onclick="delLanc('${l.id}')" aria-label="Excluir">${IC.trash}</button>
+        ? `<button class="btn ghost sm" onclick="estornarLanc('${escJS(l.id)}')">Estornar</button><button class="icon-btn" onclick="abrirReciboForm('${escJS(l.patientId)}','${escJS(l.id)}')" title="Emitir recibo">🧾</button>`
+        : `<button class="btn sm" style="background:var(--green)" onclick="openReceberForm('${escJS(l.id)}')">Receber</button>`}
+      <button class="icon-btn" onclick="openLancForm('${escJS(l.id)}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delLanc('${escJS(l.id)}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
   };
   return `${header("Financeiro","Cobranças, parcelas e recebimentos.",`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="exportCsvFin()">${IC.upload} CSV</button><button class="btn" onclick="openLancForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo lançamento</button></div>`)}
@@ -1451,7 +1455,7 @@ function openReceberForm(id){
       <p class="meta" id="r-restante-preview">O valor restante vira um novo lançamento em aberto.</p>
     </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" style="background:var(--green)" onclick="receberLanc('${id}')">Confirmar recebimento</button></div>`);
+    <button class="btn" style="background:var(--green)" onclick="receberLanc('${escJS(id)}')">Confirmar recebimento</button></div>`);
   document.getElementById("r-valor")?.addEventListener("input", ()=>{
     const rec = parseMoney(document.getElementById("r-valor").value);
     const rest = l.valor - rec;
@@ -1497,19 +1501,19 @@ function vOrcamentos(){
   const decididos = aprovados + recusados;
   const taxa = decididos ? Math.round(aprovados/decididos*100) : null;
   const filtros = [["todos","Todos"],["rascunho","Rascunhos"],["apresentado","Apresentados"],["aprovado","Aprovados"],["recusado","Recusados"]].map(([k,lab])=>
-    `<button class="btn ${ORC_FILTRO===k?"":"ghost"} sm" onclick="ORC_FILTRO='${k}';render()">${lab}</button>`).join("");
+    `<button class="btn ${ORC_FILTRO===k?"":"ghost"} sm" onclick="ORC_FILTRO='${escJS(k)}';render()">${lab}</button>`).join("");
   let list = ORC_FILTRO==="todos" ? O : O.filter(o=>o.status===ORC_FILTRO);
   list = list.slice().sort((a,b)=>b.data.localeCompare(a.data));
   const rowHTML = o=>{
     let acoes = "";
-    if(o.status==="rascunho") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${o.id}','apresentado')">Apresentar →</button>`;
-    else if(o.status==="apresentado") acoes = `<button class="btn sm" style="background:var(--green)" onclick="abrirAprovacaoOrcamento('${o.id}')">Aprovar ✓</button>
-      <button class="btn ghost sm" style="color:var(--rose)" onclick="setOrcStatus('${o.id}','recusado')">Recusar</button>`;
+    if(o.status==="rascunho") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${escJS(o.id)}','apresentado')">Apresentar →</button>`;
+    else if(o.status==="apresentado") acoes = `<button class="btn sm" style="background:var(--green)" onclick="abrirAprovacaoOrcamento('${escJS(o.id)}')">Aprovar ✓</button>
+      <button class="btn ghost sm" style="color:var(--rose)" onclick="setOrcStatus('${escJS(o.id)}','recusado')">Recusar</button>`;
     else if(o.status==="aprovado") acoes = (o.cobrancasGeradas
       ? `<button class="btn ghost sm" onclick="go('financeiro')">💰 No financeiro ✓</button>`
-      : `<button class="btn sm" style="background:var(--green)" onclick="openGerarCobrancas('${o.id}')">💰 Gerar cobranças</button>`)
-      + ` <button class="btn ghost sm" onclick="verConsentimentoOrcamento('${o.id}')">✍️ Consentimento</button>`;
-    else if(o.status==="recusado") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${o.id}','apresentado')">Reapresentar</button>`;
+      : `<button class="btn sm" style="background:var(--green)" onclick="openGerarCobrancas('${escJS(o.id)}')">💰 Gerar cobranças</button>`)
+      + ` <button class="btn ghost sm" onclick="verConsentimentoOrcamento('${escJS(o.id)}')">✍️ Consentimento</button>`;
+    else if(o.status==="recusado") acoes = `<button class="btn ghost sm" onclick="setOrcStatus('${escJS(o.id)}','apresentado')">Reapresentar</button>`;
     return `<div class="row">
       <div style="text-align:center;min-width:78px">
         <b style="display:block;font-size:13px;color:var(--teal-800)">${fmtMoney(o.total)}</b>
@@ -1521,9 +1525,9 @@ function vOrcamentos(){
       </div>
       ${pillOrc(o.status)}
       ${acoes}
-      <button class="icon-btn" onclick="imprimirOrcamento('${o.id}')" aria-label="Imprimir" title="Imprimir">${IC.print}</button>
-      <button class="icon-btn" onclick="openOrcForm('${o.id}')" aria-label="Editar">${IC.pencil}</button>
-      <button class="icon-btn del" onclick="delOrc('${o.id}')" aria-label="Excluir">${IC.trash}</button>
+      <button class="icon-btn" onclick="imprimirOrcamento('${escJS(o.id)}')" aria-label="Imprimir" title="Imprimir">${IC.print}</button>
+      <button class="icon-btn" onclick="openOrcForm('${escJS(o.id)}')" aria-label="Editar">${IC.pencil}</button>
+      <button class="icon-btn del" onclick="delOrc('${escJS(o.id)}')" aria-label="Excluir">${IC.trash}</button>
     </div>`;
   };
   return `${header("Orçamentos","Planos de tratamento: rascunho → apresentado → aprovado.",`<button class="btn" onclick="openOrcForm()" ${DB.patients.length===0?"disabled":""}>${IC.plus} Novo orçamento</button>`)}
@@ -1585,7 +1589,7 @@ async function openOrcForm(id, presetPatientId){
     <button class="btn ghost sm" onclick="addOrcItem()" style="margin:4px 0 12px">${IC.plus} Adicionar item</button>
     <div style="display:flex;justify-content:flex-end;font-size:15px;margin-bottom:12px">Total: <b id="orc-total" style="margin-left:8px;color:var(--teal-800)">R$ 0,00</b></div>
     <div class="acts" style="justify-content:space-between">
-    ${o?`<button class="btn ghost" onclick="imprimirOrcamento('${id}')">${IC.print} Imprimir</button>`:"<span></span>"}
+    ${o?`<button class="btn ghost" onclick="imprimirOrcamento('${escJS(id)}')">${IC.print} Imprimir</button>`:"<span></span>"}
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
     <button class="btn" onclick="saveOrc('${id||""}')">${o?"Salvar":"Criar orçamento"}</button></div></div>`);
   const itens = o && o.itens && o.itens.length ? o.itens : [null];
@@ -1725,8 +1729,8 @@ async function verConsentimentoOrcamento(oid){
     modal("Consentimento do orçamento", `
       <p style="font-size:13px;margin-bottom:14px">Aprovado em ${fmtDateTime(c.created_at)}, colhido por <b>${esc(c.profissionalNome)}</b>.</p>
       <div class="acts">
-        <a class="btn ghost sm" href="#" onclick="verAssinaturaOrcamento('${c.id}','paciente');return false">Ver assinatura do paciente</a>
-        <a class="btn ghost sm" href="#" onclick="verAssinaturaOrcamento('${c.id}','profissional');return false">Ver assinatura do profissional</a>
+        <a class="btn ghost sm" href="#" onclick="verAssinaturaOrcamento('${escJS(c.id)}','paciente');return false">Ver assinatura do paciente</a>
+        <a class="btn ghost sm" href="#" onclick="verAssinaturaOrcamento('${escJS(c.id)}','profissional');return false">Ver assinatura do profissional</a>
       </div>`);
   }catch(e){ /* toast já exibido pelo api() */ }
 }
@@ -1746,7 +1750,7 @@ function openGerarCobrancas(id){
       <label class="f"><span>1º vencimento</span><input type="date" id="gc-venc" value="${todayISO()}"></label>
     </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" style="background:var(--green)" onclick="gerarCobrancas('${id}')">Gerar no financeiro</button></div>`);
+    <button class="btn" style="background:var(--green)" onclick="gerarCobrancas('${escJS(id)}')">Gerar no financeiro</button></div>`);
 }
 async function gerarCobrancas(id){
   const g=i=>document.getElementById(i).value;
@@ -1797,8 +1801,8 @@ function vGastos(){
       <div style="text-align:center;min-width:74px"><b style="font-size:13px;color:var(--rose)">${fmtMoney(d.valor)}</b><span class="meta" style="display:block">${fmtDate(d.data)}</span></div>
       <div class="grow"><div style="font-weight:500;font-size:14px">${esc(d.descricao)||CATEGORIAS_DESPESA[d.categoria]}</div>
         <div class="meta">${CATEGORIAS_DESPESA[d.categoria]||d.categoria}</div></div>
-      ${d.comprovantePath?`<button class="btn ghost sm" onclick="verComprovanteDespesa('${d.id}')">${IC.receipt} Comprovante</button>`:""}
-      <button class="icon-btn del" onclick="delDespesa('${d.id}')" aria-label="Excluir">${IC.trash}</button>
+      ${d.comprovantePath?`<button class="btn ghost sm" onclick="verComprovanteDespesa('${escJS(d.id)}')">${IC.receipt} Comprovante</button>`:""}
+      <button class="icon-btn del" onclick="delDespesa('${escJS(d.id)}')" aria-label="Excluir">${IC.trash}</button>
     </div>`).join("")+`</div>`}`;
 }
 function openDespesaForm(){
@@ -1942,7 +1946,7 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
   const cellRect = (face, x, y) => {
     const st = faces[face];
     const cor = st ? FACE_COR[st] : "#fff";
-    const click = interactive ? `onclick="onOdontoFaceClick('${numero}','${face}')" style="cursor:pointer"` : "";
+    const click = interactive ? `onclick="onOdontoFaceClick('${escJS(numero)}','${escJS(face)}')" style="cursor:pointer"` : "";
     const sigla = st ? `<text x="${x+cell/2}" y="${y+cell/2+2.6}" font-size="7.5" font-weight="700" fill="#fff" text-anchor="middle" font-family="sans-serif" pointer-events="none">${FACE_STATUS_SIGLA[st]||""}</text>` : "";
     return `<rect x="${x}" y="${y}" width="${cell}" height="${cell}" fill="${cor}" stroke="#94a3b8" stroke-width="0.7" ${click}><title>${numero} - ${FACE_LABEL[face]}${st?" - "+STATUS_FACE_LABEL[st]:""}</title></rect>${sigla}`;
   };
@@ -1971,7 +1975,7 @@ function _odontoToothSVG(numero, estadoDente, bloco, interactive){
     const badgeY = LABEL_H + ROOT_H + T;
     svg += `<circle cx="${T/2}" cy="${badgeY+7}" r="7" fill="${b.cor}"/><text x="${T/2}" y="${badgeY+9.5}" font-size="7" fill="#fff" text-anchor="middle" font-family="sans-serif">${b.label}</text>`;
   }
-  const numClick = interactive ? `onclick="onOdontoDenteClick('${numero}')" style="cursor:pointer"` : "";
+  const numClick = interactive ? `onclick="onOdontoDenteClick('${escJS(numero)}')" style="cursor:pointer"` : "";
   svg += `<text x="${T/2}" y="${LABEL_H-2}" font-size="10" font-weight="700" fill="#334155" text-anchor="middle" font-family="sans-serif" ${numClick}>${numero}</text>`;
   svg += `</svg>`;
   return svg;
@@ -2020,7 +2024,7 @@ function vOdontogramaSection(p){
     ${datas.length ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
       <label style="display:flex;align-items:center;gap:6px;font-size:13px">
         <span class="meta" style="margin:0">Ver evolução em:</span>
-        <select onchange="verOdontogramaEm('${p.id}', this.value||null)" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
+        <select onchange="verOdontogramaEm('${escJS(p.id)}', this.value||null)" style="padding:5px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px">
           <option value="" ${!ODONTO_DATA_VIEW?"selected":""}>Hoje (estado atual)</option>
           ${datas.map(d=>`<option value="${d}" ${ODONTO_DATA_VIEW===d?"selected":""}>${fmtDate(d)}</option>`).join("")}
         </select>
@@ -2028,7 +2032,7 @@ function vOdontogramaSection(p){
     </div>` : ""}
     ${ODONTO_DATA_VIEW ? `<div style="background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
       <span>📅 Visualizando o odontograma como estava em <b>${fmtDate(ODONTO_DATA_VIEW)}</b> — somente leitura.</span>
-      <button class="btn ghost sm" onclick="verOdontogramaEm('${p.id}', null)">Voltar para hoje</button>
+      <button class="btn ghost sm" onclick="verOdontogramaEm('${escJS(p.id)}', null)">Voltar para hoje</button>
     </div>` : ""}
     <p class="meta" style="margin-bottom:10px">${interativo?"Clique numa face do dente para cárie/restauração/fratura. Clique no número do dente para status estrutural (ausente, implante, coroa...).":"Modo de visualização histórica — marcações desabilitadas."}</p>
     <div style="overflow-x:auto;padding:6px 0">${svgs.permanentes}</div>
@@ -2071,9 +2075,9 @@ function _renderGradeSlots(pid, posicoes, mapa, categoria){
       const a = mapa[p.k];
       const thumb = a ? (ANEXO_THUMB_CACHE[a.id] ? `<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">` : `<span style="font-size:20px">${ICONE_ANEXO[categoria]}</span>`) : `<span style="font-size:24px;color:#cbd5e1">+</span>`;
       return `<div style="text-align:center">
-        <div onclick="${a?`verAnexo('${a.id}')`:`clickSlotAnexo('${pid}','${categoria}','${p.k}')`}" style="aspect-ratio:1;border:1.5px dashed ${a?"var(--line)":"#94a3b8"};border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#f8fafc">${thumb}</div>
+        <div onclick="${a?`verAnexo('${escJS(a.id)}')`:`clickSlotAnexo('${escJS(pid)}','${escJS(categoria)}','${escJS(p.k)}')`}" style="aspect-ratio:1;border:1.5px dashed ${a?"var(--line)":"#94a3b8"};border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;cursor:pointer;background:#f8fafc">${thumb}</div>
         <div class="meta" style="font-size:10.5px;margin-top:3px;line-height:1.25">${p.label}</div>
-        ${a?`<button class="icon-btn" style="transform:scale(.75)" onclick="clickSlotAnexo('${pid}','${categoria}','${p.k}')" aria-label="Substituir">${IC.pencil}</button>`:""}
+        ${a?`<button class="icon-btn" style="transform:scale(.75)" onclick="clickSlotAnexo('${escJS(pid)}','${escJS(categoria)}','${escJS(p.k)}')" aria-label="Substituir">${IC.pencil}</button>`:""}
       </div>`;
     }).join("")}
   </div>`;
@@ -2108,7 +2112,7 @@ function vElementoSection(pid){
   return `<div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <h2 style="margin:0">Fotos por Elemento</h2>
-      <button class="btn ghost sm" onclick="abrirUploadElemento('${pid}')">+ Adicionar</button>
+      <button class="btn ghost sm" onclick="abrirUploadElemento('${escJS(pid)}')">+ Adicionar</button>
     </div>
     ${dentes.length===0 ? `<p class="meta">Nenhuma foto por elemento ainda — 11, 12, 13... com ou sem face específica.</p>` :
     dentes.map(d=>`
@@ -2117,7 +2121,7 @@ function vElementoSection(pid){
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${Object.entries(porDente[d]).map(([face,a])=>`
             <div style="text-align:center;width:74px">
-              <div onclick="verAnexo('${a.id}')" style="width:74px;height:74px;border-radius:8px;overflow:hidden;cursor:pointer;background:#f8fafc;border:1px solid var(--line)">
+              <div onclick="verAnexo('${escJS(a.id)}')" style="width:74px;height:74px;border-radius:8px;overflow:hidden;cursor:pointer;background:#f8fafc;border:1px solid var(--line)">
                 ${ANEXO_THUMB_CACHE[a.id]?`<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">`:`<span style="font-size:18px">🦷</span>`}
               </div>
               <div class="meta" style="font-size:10px">${face==="dente"?"Inteiro":(FACE_LABEL[face]||face)}</div>
@@ -2145,7 +2149,7 @@ function abrirUploadElemento(pid){
       </select>
     </label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="confirmarUploadElemento('${pid}')">Escolher imagem</button></div>`);
+    <button class="btn" onclick="confirmarUploadElemento('${escJS(pid)}')">Escolher imagem</button></div>`);
 }
 function confirmarUploadElemento(pid){
   const dente = document.getElementById("el-dente").value;
@@ -2193,7 +2197,7 @@ function _abrirModalOdonto(dente, faceClicada){
     </select></label>
     <label class="f"><span>Observação</span><input id="of-obs" placeholder="Opcional"></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="saveMarcaOdonto('${dente}','${faceClicada}')">Registrar</button></div>`);
+    <button class="btn" onclick="saveMarcaOdonto('${escJS(dente)}','${escJS(faceClicada)}')">Registrar</button></div>`);
 }
 async function saveMarcaOdonto(dente, faceClicada){
   const g=i=>document.getElementById(i)?.value;
@@ -2739,18 +2743,18 @@ function vFicha(){
   <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
     <button class="icon-btn" style="border:1px solid var(--line);background:#fff" onclick="go('patients')">${IC.left}</button>
     <div class="avatar" id="ficha-avatar" style="width:52px;height:52px;font-size:16px;overflow:hidden;cursor:pointer" onclick="document.getElementById('ficha-foto-input').click()" title="Clique para trocar a foto">${initials(p.name)}</div>
-    <input type="file" id="ficha-foto-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="uploadFotoPaciente(this,'${p.id}')">
+    <input type="file" id="ficha-foto-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="uploadFotoPaciente(this,'${escJS(p.id)}')">
     <div class="grow">
       <h1 style="font-size:19px">${esc(p.name)}</h1>
       <div class="meta">${esc(p.phone)||"sem telefone"}${p.numProntuario?" · Prontuário: "+esc(p.numProntuario):""}${idade!==null?` · ${idade} anos`:""} · Última visita: ${fmtDate(p.lastVisit)}</div>
     </div>
-    <button class="btn ghost sm" onclick="agendarPaciente('${p.id}')">${IC.cal} Agendar</button>
-    <button class="btn ghost sm" onclick="abrirMensagemRapida('${p.id}')">${IC.send} Mensagem</button>
-    <button class="btn ghost sm" onclick="gerarCarteirinha('${p.id}')">🪪 Carteirinha</button>
-    <button class="btn ghost sm" onclick="gerarAnamnese('${p.id}')">${IC.print} Anamnese</button>
-    <button class="btn ghost sm" onclick="abrirCompartilharAnamnese('${p.id}','${esc(p.name)}','${esc(p.phone)}')">📤 Anamnese remota</button>
-    <button class="btn ghost sm" onclick="abrirPreencherAnamnesePresencial('${p.id}')">🖊️ Preencher anamnese</button>
-    <button class="icon-btn" onclick="openPatientForm('${p.id}')" aria-label="Editar cadastro">${IC.pencil}</button>
+    <button class="btn ghost sm" onclick="agendarPaciente('${escJS(p.id)}')">${IC.cal} Agendar</button>
+    <button class="btn ghost sm" onclick="abrirMensagemRapida('${escJS(p.id)}')">${IC.send} Mensagem</button>
+    <button class="btn ghost sm" onclick="gerarCarteirinha('${escJS(p.id)}')">🪪 Carteirinha</button>
+    <button class="btn ghost sm" onclick="gerarAnamnese('${escJS(p.id)}')">${IC.print} Anamnese</button>
+    <button class="btn ghost sm" onclick="abrirCompartilharAnamnese('${escJS(p.id)}','${escJS(p.name)}','${escJS(p.phone)}')">📤 Anamnese remota</button>
+    <button class="btn ghost sm" onclick="abrirPreencherAnamnesePresencial('${escJS(p.id)}')">🖊️ Preencher anamnese</button>
+    <button class="icon-btn" onclick="openPatientForm('${escJS(p.id)}')" aria-label="Editar cadastro">${IC.pencil}</button>
   </div>
 
   <div class="card" style="margin-bottom:12px;display:flex;gap:18px;flex-wrap:wrap;padding:12px 16px">
@@ -2776,7 +2780,7 @@ function vFicha(){
 
   <div class="card" style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px">
     <span style="font-size:13px;font-weight:600">🔔 Retorno preventivo:</span>
-    <select onchange="setRetornoMeses('${p.id}',this.value)" style="width:auto;font-size:13px;padding:6px 9px">
+    <select onchange="setRetornoMeses('${escJS(p.id)}',this.value)" style="width:auto;font-size:13px;padding:6px 9px">
       <option value="" ${FICHA_RETORNO===null?"selected":""}>Padrão da clínica (${DB.settings.retornoMesesPadrao||6} meses)</option>
       ${[3,4,6,12].map(m=>`<option value="${m}" ${FICHA_RETORNO===m?"selected":""}>${m} meses</option>`).join("")}
     </select>
@@ -2801,13 +2805,13 @@ function vFicha(){
   <div class="card" style="margin-bottom:12px;border-color:#fde68a;background:#fffbeb">
     <h2>Observações antigas (campo livre)</h2>
     <div style="font-size:13px;white-space:pre-wrap;color:#78350f;margin-bottom:10px">${esc(p.notes)}</div>
-    <button class="btn ghost sm" onclick="migrarNotas('${p.id}')">📥 Migrar para evolução</button>
+    <button class="btn ghost sm" onclick="migrarNotas('${escJS(p.id)}')">📥 Migrar para evolução</button>
   </div>` : ""}
 
   <div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
       <h2 style="margin:0">Histórico de evoluções ${FICHA_EVOLUCOES.length?`(${FICHA_EVOLUCOES.length})`:""}</h2>
-      ${FICHA_EVOLUCOES.length?`<button class="btn ghost sm" onclick="imprimirProntuario('${p.id}')">${IC.print} Imprimir prontuário</button>`:""}
+      ${FICHA_EVOLUCOES.length?`<button class="btn ghost sm" onclick="imprimirProntuario('${escJS(p.id)}')">${IC.print} Imprimir prontuário</button>`:""}
     </div>
     ${FICHA_EVOLUCOES.length===0
       ? `<div style="color:var(--soft);font-size:14px;padding:6px 0">Nenhuma evolução registrada ainda.</div>`
@@ -2834,10 +2838,10 @@ function vFicha(){
           <div style="min-width:78px"><b style="font-size:13px;color:var(--teal-800)">${fmtMoney(o.total)}</b><span class="meta" style="display:block">${fmtDate(o.data)}</span></div>
           <div class="grow"><div style="font-size:13px">${o.numItens} ite${o.numItens===1?"m":"ns"}${o.observacoes?` · ${esc(o.observacoes)}`:""}</div></div>
           ${pillOrc(o.status)}
-          <button class="icon-btn" onclick="openOrcForm('${o.id}')">${IC.pencil}</button>
+          <button class="icon-btn" onclick="openOrcForm('${escJS(o.id)}')">${IC.pencil}</button>
         </div>`).join("");
     })()}
-    <button class="btn ghost sm" style="margin-top:8px" onclick="openOrcForm(null,'${p.id}')">${IC.plus} Novo orçamento</button>
+    <button class="btn ghost sm" style="margin-top:8px" onclick="openOrcForm(null,'${escJS(p.id)}')">${IC.plus} Novo orçamento</button>
   </div>
 
   <div class="card" style="margin-bottom:12px">
@@ -2846,17 +2850,17 @@ function vFicha(){
       ? `<div style="color:var(--soft);font-size:14px;padding:4px 0 10px">Nenhum arquivo anexado.</div>`
       : FICHA_ANEXOS.map(a=>`
         <div class="row">
-          <div id="thumb-${a.id}" onclick="verAnexo('${a.id}')" style="width:40px;height:40px;min-width:40px;border-radius:8px;overflow:hidden;background:var(--bg-soft,#f1f5f9);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer">
+          <div id="thumb-${a.id}" onclick="verAnexo('${escJS(a.id)}')" style="width:40px;height:40px;min-width:40px;border-radius:8px;overflow:hidden;background:var(--bg-soft,#f1f5f9);display:flex;align-items:center;justify-content:center;font-size:20px;cursor:pointer">
             ${ANEXO_THUMB_CACHE[a.id] ? `<img src="${ANEXO_THUMB_CACHE[a.id]}" style="width:100%;height:100%;object-fit:cover">` : (ICONE_ANEXO[a.categoria]||"📎")}
           </div>
           <div class="grow">
             <div style="font-weight:500;font-size:14px;word-break:break-all">${esc(a.nome)} ${a.origemId?'<span class="pill" style="background:#f1f5f9;color:#64748b;border-color:#e2e8f0;font-size:10px">cópia editada</span>':""}</div>
             <div class="meta">${CATEGORIAS_ANEXO[a.categoria]||a.categoria} · ${fmtBytes(a.tamanho)} · ${fmtDateTime(a.created_at)}</div>
           </div>
-          <button class="btn ghost sm" onclick="verAnexo('${a.id}')">Abrir</button>
-          ${(a.mimeType||"").startsWith("image/")?`<button class="icon-btn" onclick="abrirEditorAnexo('${a.id}')" aria-label="Editar">✏️</button>`:""}
-          <button class="icon-btn" onclick="renomearAnexo('${a.id}')" aria-label="Renomear">${IC.pencil}</button>
-          <button class="icon-btn del" onclick="delAnexo('${a.id}')" aria-label="Excluir">${IC.trash}</button>
+          <button class="btn ghost sm" onclick="verAnexo('${escJS(a.id)}')">Abrir</button>
+          ${(a.mimeType||"").startsWith("image/")?`<button class="icon-btn" onclick="abrirEditorAnexo('${escJS(a.id)}')" aria-label="Editar">✏️</button>`:""}
+          <button class="icon-btn" onclick="renomearAnexo('${escJS(a.id)}')" aria-label="Renomear">${IC.pencil}</button>
+          <button class="icon-btn del" onclick="delAnexo('${escJS(a.id)}')" aria-label="Excluir">${IC.trash}</button>
         </div>`).join("")}
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
       <button class="btn ghost sm" onclick="document.getElementById('anexo-file').click()">${IC.upload} Anexar arquivos</button>
@@ -2871,7 +2875,7 @@ function vFicha(){
       <span class="meta">${ASSINATURA_PACIENTE_CACHE[p.id]?"":"Nenhuma assinatura registrada."}</span>
       ${ASSINATURA_PACIENTE_CACHE[p.id]?`<img src="${ASSINATURA_PACIENTE_CACHE[p.id]}" style="max-height:80px;object-fit:contain">`:""}
     </div>
-    <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${p.id}','${esc(p.name)}')">✍️ Coletar assinatura</button>
+    <button class="btn ghost sm" onclick="abrirAssinaturaModal('paciente','${escJS(p.id)}','${escJS(p.name)}')">✍️ Coletar assinatura</button>
   </div>
 
   ${vFichaDocumentosSection(p)}
@@ -2904,9 +2908,9 @@ function vFicha(){
         <div class="row">
           <div style="min-width:74px"><b style="font-size:12px;color:${l.pagoEm?"var(--green)":"var(--rose)"}">${fmtMoney(l.valor)}</b><span class="meta" style="display:block">${l.pagoEm?"pago":"vence "+fmtDate(l.vencimento)}</span></div>
           <div class="grow"><div style="font-size:13px">${esc(l.descricao)}</div></div>
-          ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:`<button class="btn sm" style="background:var(--green);padding:5px 10px;font-size:12px" onclick="openReceberForm('${l.id}')">Receber</button>`}
+          ${l.pagoEm?`<span class="pill p-concluido">Pago</span>`:`<button class="btn sm" style="background:var(--green);padding:5px 10px;font-size:12px" onclick="openReceberForm('${escJS(l.id)}')">Receber</button>`}
         </div>`).join("")}
-      <button class="btn ghost sm" style="margin-top:8px" onclick="openLancFormFromFicha('${p.id}')">${IC.plus} Novo lançamento</button>
+      <button class="btn ghost sm" style="margin-top:8px" onclick="openLancFormFromFicha('${escJS(p.id)}')">${IC.plus} Novo lançamento</button>
     </div>
   </div>`;
 }
@@ -3068,7 +3072,7 @@ function renomearAnexo(id){
   modal("Renomear arquivo", `
     <label class="f"><span>Nome do arquivo *</span><input id="anexo-novo-nome" value="${esc(a.nome)}"></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="confirmarRenomeioAnexo('${id}')">Salvar</button></div>`);
+    <button class="btn" onclick="confirmarRenomeioAnexo('${escJS(id)}')">Salvar</button></div>`);
 }
 async function confirmarRenomeioAnexo(id){
   const novoNome = document.getElementById("anexo-novo-nome")?.value.trim();
@@ -3107,7 +3111,7 @@ function abrirAssinaturaModal(tipo, id, nomeExibicao){
     <div class="acts">
       <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn" onclick="salvarAssinaturaCanvas('${tipo}','${id}')">Salvar assinatura</button>
+      <button class="btn" onclick="salvarAssinaturaCanvas('${escJS(tipo)}','${escJS(id)}')">Salvar assinatura</button>
     </div>`);
   initAssinaturaCanvas();
 }
@@ -3521,8 +3525,8 @@ function vConsentimentoSection(p){
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <h2 style="margin:0">✍️ Consentimento de Mídia e Divulgação</h2>
       <div style="display:flex;gap:6px">
-        ${chaves.length?`<button class="icon-btn" onclick="imprimirConsentimentoMidia('${p.id}')" aria-label="Imprimir" title="Imprimir">${IC.print}</button>`:""}
-        <button class="btn ghost sm" onclick="abrirConsentimentoModal('${p.id}')">Atualizar consentimento</button>
+        ${chaves.length?`<button class="icon-btn" onclick="imprimirConsentimentoMidia('${escJS(p.id)}')" aria-label="Imprimir" title="Imprimir">${IC.print}</button>`:""}
+        <button class="btn ghost sm" onclick="abrirConsentimentoModal('${escJS(p.id)}')">Atualizar consentimento</button>
       </div>
     </div>
     ${chaves.length===0 ? `<p class="meta">Carregando…</p>` : `
@@ -3542,7 +3546,7 @@ function vConsentimentoSection(p){
         ${hist.map(h=>`<div class="row" style="padding:6px 0">
           <div class="grow">
             <div style="font-size:12.5px">${esc(tipos[h.tipo]||h.tipo)} — <b style="color:${h.status==='autorizado'?'#16a34a':'#dc2626'}">${h.status==='autorizado'?'autorizado':'revogado'}</b></div>
-            <div class="meta">${esc(h.profissionalNome)} · ${fmtDateTime(h.created_at)} · <a href="#" onclick="verAssinaturaConsentimento('${h.id}');return false" style="color:var(--teal-700);font-weight:600">ver assinatura</a></div>
+            <div class="meta">${esc(h.profissionalNome)} · ${fmtDateTime(h.created_at)} · <a href="#" onclick="verAssinaturaConsentimento('${escJS(h.id)}');return false" style="color:var(--teal-700);font-weight:600">ver assinatura</a></div>
           </div>
         </div>`).join("")}
       </div>
@@ -3570,7 +3574,7 @@ function abrirConsentimentoModal(pid){
     <div class="acts">
       <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn" onclick="salvarConsentimentoMidia('${pid}')">Salvar</button>
+      <button class="btn" onclick="salvarConsentimentoMidia('${escJS(pid)}')">Salvar</button>
     </div>`);
   initAssinaturaCanvas();
 }
@@ -3625,8 +3629,8 @@ function vConfirm(C){
   q.map(a=>{const p=pById(a.patientId);
     return queueCard(p?p.name:"Paciente removido",fmtDate(a.date)+" às "+a.time+" · "+a.procedure,
       a.confirmSent?"Mensagem enviada — aguardando resposta":null,
-      (p?`<button class="btn whats sm" onclick="sendConfirm('${a.id}')">${IC.send} ${a.confirmSent?"Reenviar":"Enviar WhatsApp"}</button>`:"")+
-      `<button class="btn ghost sm" onclick="markConfirmed('${a.id}')">Confirmou ✓</button>`);
+      (p?`<button class="btn whats sm" onclick="sendConfirm('${escJS(a.id)}')">${IC.send} ${a.confirmSent?"Reenviar":"Enviar WhatsApp"}</button>`:"")+
+      `<button class="btn ghost sm" onclick="markConfirmed('${escJS(a.id)}')">Confirmou ✓</button>`);
   }).join(""));
 }
 async function sendConfirm(id){
@@ -3655,9 +3659,9 @@ function vRetornos(){
       `Última visita: ${fmtDate(r.lastVisit)} · retorno de ${r.meses} meses · ${r.atrasado?"venceu":"vence"} em ${fmtDate(r.due)}`,
       flag,
       (r.atrasado?`<span class="pill p-faltou">Atrasado</span>`:`<span class="pill p-agendado">Em breve</span>`)+
-      (r.phone?`<button class="btn whats sm" onclick="sendRetorno('${r.patientId}')">${IC.send} ${r.sentAt?"Reenviar":"Convidar retorno"}</button>`:"")+
-      `<button class="btn ghost sm" onclick="dismissRetorno('${r.patientId}')" title="Sai da fila por 30 dias, sem enviar mensagem">Dispensar</button>`+
-      `<button class="btn ghost sm" onclick="openFicha('${r.patientId}')">Ficha</button>`);
+      (r.phone?`<button class="btn whats sm" onclick="sendRetorno('${escJS(r.patientId)}')">${IC.send} ${r.sentAt?"Reenviar":"Convidar retorno"}</button>`:"")+
+      `<button class="btn ghost sm" onclick="dismissRetorno('${escJS(r.patientId)}')" title="Sai da fila por 30 dias, sem enviar mensagem">Dispensar</button>`+
+      `<button class="btn ghost sm" onclick="openFicha('${escJS(r.patientId)}')">Ficha</button>`);
   }).join(""));
 }
 async function sendRetorno(pid){
@@ -3694,7 +3698,7 @@ async function abrirCompartilharAnamnese(pid, nome, phone){
     </label>
     <div id="cba-body">
       <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn" onclick="_gerarLinkAnamnese('${pid}','${esc(nome)}','${esc(phone)}')">Gerar link para o paciente</button></div>
+      <button class="btn" onclick="_gerarLinkAnamnese('${escJS(pid)}','${escJS(nome)}','${escJS(phone)}')">Gerar link para o paciente</button></div>
     </div>`);
 }
 async function _gerarLinkAnamnese(pid, nome, phone){
@@ -3718,8 +3722,8 @@ async function _gerarLinkAnamnese(pid, nome, phone){
   if(body) body.innerHTML = `
     <label class="f"><span>Link</span><input id="anamnese-link-input" value="${esc(r.link)}" readonly onclick="this.select()"></label>
     <div class="acts" style="justify-content:flex-start;flex-wrap:wrap;margin-bottom:4px">
-      <button class="btn ghost sm" onclick="navigator.clipboard.writeText('${r.link}').then(()=>toast('Link copiado.'))">${IC.upload} Copiar link</button>
-      ${phone?`<button class="btn whats sm" onclick="window.open('${waUrl}','_blank')">${IC.send} Enviar pelo WhatsApp</button>`:""}
+      <button class="btn ghost sm" onclick="navigator.clipboard.writeText('${escJS(r.link)}').then(()=>toast('Link copiado.'))">${IC.upload} Copiar link</button>
+      ${phone?`<button class="btn whats sm" onclick="window.open('${escJS(waUrl)}','_blank')">${IC.send} Enviar pelo WhatsApp</button>`:""}
     </div>
     ${qrSvg?`<div style="margin-top:12px;text-align:center">
       <div style="width:170px;height:170px;margin:0 auto">${qrSvg}</div>
@@ -3778,7 +3782,7 @@ function vFeedbackAdmin(){
         ${f.resposta?`<div style="margin-top:6px;padding:8px 10px;background:var(--teal-100);border-radius:8px;font-size:13px"><b>Sua resposta:</b> ${esc(f.resposta)}</div>`:""}
       </div>
       <span class="pill ${FEEDBACK_STATUS_PILL[f.status]||"p-cancelado"}">${FEEDBACK_STATUS_LABEL[f.status]||f.status}</span>
-      <button class="btn ghost sm" onclick="abrirResponderFeedback('${f.id}')">Responder</button>
+      <button class="btn ghost sm" onclick="abrirResponderFeedback('${escJS(f.id)}')">Responder</button>
     </div>`).join("")+`</div>`}`;
 }
 function abrirResponderFeedback(id){
@@ -3794,7 +3798,7 @@ function abrirResponderFeedback(id){
       <option value="fechado" ${f.status==="fechado"?"selected":""}>Fechado</option>
     </select></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="salvarRespostaFeedback('${id}')">Salvar</button></div>`);
+    <button class="btn" onclick="salvarRespostaFeedback('${escJS(id)}')">Salvar</button></div>`);
 }
 async function salvarRespostaFeedback(id){
   const resposta = document.getElementById("fb-resp")?.value||"";
@@ -3827,7 +3831,7 @@ function vClinicas(){
     ${PLANOS_SAAS.map(p=>`<div class="row">
       <div class="grow"><div style="font-weight:500;font-size:14px">${esc(p.nome)}</div>
         <div class="meta">${fmtMoney(p.valor)}/mês · ${p.limitePacientes?p.limitePacientes+" pacientes":"pacientes ilimitados"} · ${p.limiteProfissionais?p.limiteProfissionais+" profissionais":"profissionais ilimitados"}</div></div>
-      <button class="icon-btn" onclick="openPlanoSaasForm('${p.id}')">${IC.pencil}</button>
+      <button class="icon-btn" onclick="openPlanoSaasForm('${escJS(p.id)}')">${IC.pencil}</button>
     </div>`).join("")}
   </div>`:`<div class="card" style="margin-bottom:16px"><p class="meta">Nenhum plano criado ainda — crie um plano pra poder cobrar as clínicas.</p></div>`}
   ${list.length===0?empty("Nenhuma clínica cadastrada ainda."):
@@ -3846,8 +3850,8 @@ function vClinicas(){
       ${c.planoSaasId?`<button class="btn ghost sm" onclick="gerarCobrancaMp(${c.id})">💳 Gerar cobrança</button>`:""}
       ${c.numNaoVerificados?`<button class="btn ghost sm" onclick="confirmarEmailsClinica(${c.id})">✉️ Confirmar e-mail (${c.numNaoVerificados})</button>`:""}
       <button class="btn ${c.bloqueadaManualmente?"":"ghost"} sm" style="${c.bloqueadaManualmente?"background:var(--rose)":""}" onclick="toggleBloqueioClinica(${c.id},${!c.bloqueadaManualmente})">${c.bloqueadaManualmente?"Desbloquear":"Bloquear"}</button>
-      <button class="btn ghost sm" onclick="toggleAtivaClinica(${c.id},${!c.ativa},'${esc(c.nome)}')">${c.ativa?"Marcar inativa":"Marcar ativa"}</button>
-      ${!c.ativa?`<button class="icon-btn del" onclick="abrirExcluirClinica(${c.id},'${esc(c.nome)}')" title="Excluir clínica e todos os dados">${IC.trash}</button>`:""}
+      <button class="btn ghost sm" onclick="toggleAtivaClinica(${c.id},${!c.ativa},'${escJS(c.nome)}')">${c.ativa?"Marcar inativa":"Marcar ativa"}</button>
+      ${!c.ativa?`<button class="icon-btn del" onclick="abrirExcluirClinica(${c.id},'${escJS(c.nome)}')" title="Excluir clínica e todos os dados">${IC.trash}</button>`:""}
     </div>`).join("")+`</div>`}`;
 }
 function openPlanoSaasForm(id){
@@ -3900,7 +3904,7 @@ function abrirExcluirClinica(cid, nome){
     <p style="font-size:13.5px;margin-bottom:10px">Um backup completo é baixado automaticamente assim que você confirmar — é a última chance de recuperar algo depois disso.</p>
     <label class="f"><span>Digite <b>${esc(nome)}</b> pra confirmar</span><input id="excl-clinica-confirma" placeholder="${esc(nome)}"></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn danger" onclick="confirmarExcluirClinica(${cid},'${esc(nome)}')">Excluir definitivamente</button></div>`);
+    <button class="btn danger" onclick="confirmarExcluirClinica(${cid},'${escJS(nome)}')">Excluir definitivamente</button></div>`);
 }
 async function confirmarExcluirClinica(cid, nome){
   const digitado = document.getElementById("excl-clinica-confirma")?.value||"";
@@ -3947,8 +3951,8 @@ function vAnamneseRemota(){
   return header("Anamneses recebidas","Preenchidas pelo paciente, aguardando revisão antes de entrar no cadastro.")+
   (list.length===0?empty("Nenhuma anamnese aguardando revisão."):
   list.map(a=>queueCard(a.patientName, "Enviada em "+fmtDateTime(a.filledAt), null,
-    `<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Visualizar">${IC.eye}</button>
-     <button class="btn sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`)).join(""));
+    `<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${escJS(a.id)}')" title="Visualizar">${IC.eye}</button>
+     <button class="btn sm" onclick="abrirRevisaoAnamnese('${escJS(a.id)}')">Revisar</button>`)).join(""));
 }
 async function abrirRevisaoAnamnese(id){
   let d;
@@ -4015,11 +4019,11 @@ async function abrirRevisaoAnamnese(id){
     ${!d.temAssinatura?`<p class="meta" style="color:var(--rose);margin-bottom:8px">⚠️ Assinatura pendente — o paciente ainda não assinou.</p>`:""}
     <div class="acts" style="justify-content:space-between">
     <div style="display:flex;gap:8px">
-      <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${id}')">${IC.eye} Visualizar</button>
-      ${d.temAssinatura?`<button class="btn ghost" onclick="verAssinaturaAnamnese('${id}')">✍️ Ver assinatura</button>`:`<button class="btn ghost" onclick="abrirColherAssinaturaAnamnese('${id}')">✍️ Colher assinatura</button>`}
+      <button class="btn ghost" onclick="imprimirAnamnesePreenchida('${escJS(id)}')">${IC.eye} Visualizar</button>
+      ${d.temAssinatura?`<button class="btn ghost" onclick="verAssinaturaAnamnese('${escJS(id)}')">✍️ Ver assinatura</button>`:`<button class="btn ghost" onclick="abrirColherAssinaturaAnamnese('${escJS(id)}')">✍️ Colher assinatura</button>`}
     </div>
     <div style="display:flex;gap:8px"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="aprovarAnamneseRemota('${id}')">Confirmar e aplicar ao cadastro</button></div></div>`);
+    <button class="btn" onclick="aprovarAnamneseRemota('${escJS(id)}')">Confirmar e aplicar ao cadastro</button></div></div>`);
   window._raPerguntas = d.perguntas || [];
 }
 async function aprovarAnamneseRemota(id){
@@ -4129,7 +4133,7 @@ async function abrirPreencherAnamnesePresencial(pid){
       <button type="button" class="btn ghost sm" style="margin-top:4px" onclick="limparAssinaturaCanvas()">Limpar</button>
     </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="salvarAnamnesePresencial('${p.id}')">Salvar</button></div>`);
+    <button class="btn" onclick="salvarAnamnesePresencial('${escJS(p.id)}')">Salvar</button></div>`);
   initAssinaturaCanvas();
 }
 async function salvarAnamnesePresencial(pid){
@@ -4162,7 +4166,7 @@ async function salvarAnamnesePresencial(pid){
   modal("Anamnese registrada", `
     <p style="font-size:14px;margin-bottom:16px">Anamnese salva e aplicada ao prontuário de ${esc(p?p.name:"")}. ✅</p>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
-    <button class="btn" onclick="closeModal();imprimirAnamnesePreenchida('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+    <button class="btn" onclick="closeModal();imprimirAnamnesePreenchida('${escJS(r.id)}')">${IC.print} Imprimir agora</button></div>`);
 }
 
 /* ════════════════════════════════════════════
@@ -4206,7 +4210,7 @@ function abrirPrescricaoForm(pid){
     <div style="margin-bottom:10px">
       <span class="meta" style="display:block;margin-bottom:6px">Atalhos (clique pra adicionar, depois edite se precisar):</span>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${RECEITA_ATALHOS.map(a=>`<button class="btn ghost sm" style="font-size:11.5px;padding:5px 9px" onclick='addPresItem(${JSON.stringify(a)})'>${esc(a.medicamento)}</button>`).join("")}
+        ${RECEITA_ATALHOS.map(a=>`<button class="btn ghost sm" style="font-size:11.5px;padding:5px 9px" onclick='addPresItem(${esc(JSON.stringify(a))})'>${esc(a.medicamento)}</button>`).join("")}
       </div>
     </div>
     <div style="display:grid;grid-template-columns:1.3fr 1.7fr 32px;gap:6px;margin-bottom:4px" class="meta">
@@ -4216,7 +4220,7 @@ function abrirPrescricaoForm(pid){
     <button class="btn ghost sm" onclick="addPresItem()" style="margin:4px 0 12px">${IC.plus} Adicionar item</button>
     <label class="f"><span>Observações</span><textarea id="pres-obs" rows="2" placeholder="Opcional"></textarea></label>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="salvarPrescricao('${pid}')">Emitir</button></div>`);
+    <button class="btn" onclick="salvarPrescricao('${escJS(pid)}')">Emitir</button></div>`);
   addPresItem();
 }
 async function salvarPrescricao(pid){
@@ -4238,7 +4242,7 @@ async function salvarPrescricao(pid){
   modal("Prescrição emitida", `
     <p style="font-size:14px;margin-bottom:16px">Prescrição registrada. ✅</p>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
-    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${escJS(r.id)}')">${IC.print} Imprimir agora</button></div>`);
 }
 
 function abrirAtestadoForm(pid){
@@ -4257,7 +4261,7 @@ function abrirAtestadoForm(pid){
       <label class="f"><span>CID</span><input id="at-cid" placeholder="Opcional"></label>
     </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="salvarAtestado('${pid}')">Emitir</button></div>`);
+    <button class="btn" onclick="salvarAtestado('${escJS(pid)}')">Emitir</button></div>`);
 }
 async function salvarAtestado(pid){
   const g=i=>document.getElementById(i)?.value||"";
@@ -4277,7 +4281,7 @@ async function salvarAtestado(pid){
   modal("Atestado emitido", `
     <p style="font-size:14px;margin-bottom:16px">Atestado registrado. ✅</p>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
-    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${escJS(r.id)}')">${IC.print} Imprimir agora</button></div>`);
 }
 
 function _reciboLancamentosDoPaciente(pid){
@@ -4303,7 +4307,7 @@ function abrirReciboForm(pid, lancId){
       <label class="f"><span>Data do pagamento</span><input type="date" id="rec-data" value="${sel?sel.pagoEm:todayISO()}"></label>
     </div>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Cancelar</button>
-    <button class="btn" onclick="salvarRecibo('${pid}')">Emitir</button></div>`);
+    <button class="btn" onclick="salvarRecibo('${escJS(pid)}')">Emitir</button></div>`);
 }
 function _recAplicarLancSelecionado(){
   const id = document.getElementById("rec-lanc").value;
@@ -4332,7 +4336,7 @@ async function salvarRecibo(pid){
   modal("Recibo emitido", `
     <p style="font-size:14px;margin-bottom:16px">Recibo registrado. ✅</p>
     <div class="acts"><button class="btn ghost" onclick="closeModal()">Fechar</button>
-    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${r.id}')">${IC.print} Imprimir agora</button></div>`);
+    <button class="btn" onclick="closeModal();imprimirDocumentoEmitido('${escJS(r.id)}')">${IC.print} Imprimir agora</button></div>`);
 }
 
 function vFichaDocumentosSection(p){
@@ -4341,9 +4345,9 @@ function vFichaDocumentosSection(p){
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
       <h2 style="margin:0">Documentos ${list.length?`(${list.length})`:""}</h2>
       <div style="display:flex;gap:6px">
-        <button class="btn ghost sm" onclick="abrirPrescricaoForm('${p.id}')">💊 Prescrição</button>
-        <button class="btn ghost sm" onclick="abrirAtestadoForm('${p.id}')">📋 Atestado</button>
-        <button class="btn ghost sm" onclick="abrirReciboForm('${p.id}')">🧾 Recibo</button>
+        <button class="btn ghost sm" onclick="abrirPrescricaoForm('${escJS(p.id)}')">💊 Prescrição</button>
+        <button class="btn ghost sm" onclick="abrirAtestadoForm('${escJS(p.id)}')">📋 Atestado</button>
+        <button class="btn ghost sm" onclick="abrirReciboForm('${escJS(p.id)}')">🧾 Recibo</button>
       </div>
     </div>
     ${list.length===0?`<div style="color:var(--soft);font-size:14px">Nenhum documento emitido ainda.</div>`:
@@ -4353,8 +4357,8 @@ function vFichaDocumentosSection(p){
           <div style="font-weight:500;font-size:14px">${DOC_TIPO_LABEL[d.tipo]||d.tipo}</div>
           <div class="meta">${fmtDateTime(d.created_at)}${d.profissionalNome?" · "+esc(d.profissionalNome):""}</div>
         </div>
-        <button class="icon-btn" onclick="imprimirDocumentoEmitido('${d.id}')" title="Visualizar">${IC.eye}</button>
-        <button class="icon-btn del" onclick="delDocumentoEmitido('${d.id}')" aria-label="Excluir">${IC.trash}</button>
+        <button class="icon-btn" onclick="imprimirDocumentoEmitido('${escJS(d.id)}')" title="Visualizar">${IC.eye}</button>
+        <button class="icon-btn del" onclick="delDocumentoEmitido('${escJS(d.id)}')" aria-label="Excluir">${IC.trash}</button>
       </div>`).join("")}
   </div>`;
 }
@@ -4429,10 +4433,10 @@ function vFichaAnamnesesSection(p){
         </div>
         <span class="pill ${ANAM_STATUS_PILL[a.status]||"p-cancelado"}">${ANAM_STATUS_LABEL[a.status]||a.status}</span>
         ${a.status!=="pendente" && !a.temAssinatura?`<span class="pill p-faltou">Assinatura pendente</span>`:""}
-        ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${a.id}')">Revisar</button>`:""}
-        ${a.status!=="pendente" && !a.temAssinatura?`<button class="btn ghost sm" onclick="abrirColherAssinaturaAnamnese('${a.id}')">✍️ Colher assinatura</button>`:""}
-        ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${a.id}')" title="Visualizar">${IC.eye}</button>`:""}
-        <button class="icon-btn del" onclick="delAnamnese('${a.id}')" aria-label="Excluir" title="Excluir">${IC.trash}</button>
+        ${a.status==="preenchido"?`<button class="btn ghost sm" onclick="abrirRevisaoAnamnese('${escJS(a.id)}')">Revisar</button>`:""}
+        ${a.status!=="pendente" && !a.temAssinatura?`<button class="btn ghost sm" onclick="abrirColherAssinaturaAnamnese('${escJS(a.id)}')">✍️ Colher assinatura</button>`:""}
+        ${a.status!=="pendente"?`<button class="icon-btn" onclick="imprimirAnamnesePreenchida('${escJS(a.id)}')" title="Visualizar">${IC.eye}</button>`:""}
+        <button class="icon-btn del" onclick="delAnamnese('${escJS(a.id)}')" aria-label="Excluir" title="Excluir">${IC.trash}</button>
       </div>`).join("")}
   </div>`;
 }
@@ -4451,7 +4455,7 @@ function abrirColherAssinaturaAnamnese(aid){
     <div class="acts">
       <button class="btn ghost" onclick="limparAssinaturaCanvas()">Limpar</button>
       <button class="btn ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn" onclick="_salvarAssinaturaAnamneseColetada('${aid}')">Salvar assinatura</button>
+      <button class="btn" onclick="_salvarAssinaturaAnamneseColetada('${escJS(aid)}')">Salvar assinatura</button>
     </div>`);
   initAssinaturaCanvas();
 }
@@ -4568,8 +4572,8 @@ function vReactivate(C){
   (list.length===0?empty("Nenhum paciente inativo. 🎉"):
   list.map(p=>queueCard(p.name,"Última visita: "+fmtDate(p.lastVisit),
     p.reactivateSentAt?"Mensagem enviada em "+fmtDate(p.reactivateSentAt):null,
-    `<button class="btn whats sm" onclick="sendReactivate('${p.id}')">${IC.send} ${p.reactivateSentAt?"Reenviar":"Enviar convite"}</button>
-     <button class="btn ghost sm" onclick="dismissReactivate('${p.id}')" title="Sai da fila por 30 dias, sem enviar mensagem">Dispensar</button>`)).join(""));
+    `<button class="btn whats sm" onclick="sendReactivate('${escJS(p.id)}')">${IC.send} ${p.reactivateSentAt?"Reenviar":"Enviar convite"}</button>
+     <button class="btn ghost sm" onclick="dismissReactivate('${escJS(p.id)}')" title="Sai da fila por 30 dias, sem enviar mensagem">Dispensar</button>`)).join(""));
 }
 async function sendReactivate(id){
   const p=pById(id); if(!p)return;
@@ -4601,10 +4605,10 @@ function vSurvey(C){
   (done.length===0?empty("Nenhuma consulta concluída ainda."):
   done.map(a=>{const p=pById(a.patientId), s=surveyed.get(a.id);
     let actions;
-    if(!s) actions=p?`<button class="btn whats sm" onclick="sendSurvey('${a.id}')">${IC.send} Enviar pesquisa</button>`:"";
+    if(!s) actions=p?`<button class="btn whats sm" onclick="sendSurvey('${escJS(a.id)}')">${IC.send} Enviar pesquisa</button>`:"";
     else if(s.score===null||s.score===undefined)
       actions=`<div class="score-grid"><span class="meta" style="margin-right:4px">Nota:</span>`+
-        Array.from({length:11},(_,i)=>`<button onclick="setScore('${s.id}',${i})">${i}</button>`).join("")+`</div>`;
+        Array.from({length:11},(_,i)=>`<button onclick="setScore('${escJS(s.id)}',${i})">${i}</button>`).join("")+`</div>`;
     else { const cls=s.score>=9?"hi":s.score>=7?"mid":"lo"; actions=`<span class="note ${cls}">Nota ${s.score}</span>`; }
     return queueCard(p?p.name:"Paciente removido",a.procedure+" em "+fmtDate(a.date),
       s&&(s.score===null||s.score===undefined)?"Enviada em "+fmtDate(s.sentAt)+" — aguardando nota":null,actions);
@@ -4633,7 +4637,7 @@ function vReview(){
   list.map(s=>{const p=pById(s.patientId);
     return queueCard(p?p.name:"Paciente removido","Nota "+s.score+" na pesquisa",
       s.reviewSent?"Convite enviado em "+fmtDate(s.reviewSentAt):null,
-      p?`<button class="btn whats sm" onclick="sendReview('${s.id}')">⭐ ${s.reviewSent?"Reenviar":"Pedir avaliação"}</button>`:"");
+      p?`<button class="btn whats sm" onclick="sendReview('${escJS(s.id)}')">⭐ ${s.reviewSent?"Reenviar":"Pedir avaliação"}</button>`:"");
   }).join(""));
 }
 async function sendReview(id){
@@ -4667,7 +4671,7 @@ function vTarefas(){
               ${t.dataVencimento?` · 📅 ${fmtDate(t.dataVencimento)}`:""}
             </div>
             <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-              ${cols.filter(c=>c!==col).map(c=>`<button class="btn ghost sm" style="font-size:11px;padding:4px 8px" onclick="moverTarefa(${t.id},'${c}')">${colLabel[c]}</button>`).join("")}
+              ${cols.filter(c=>c!==col).map(c=>`<button class="btn ghost sm" style="font-size:11px;padding:4px 8px" onclick="moverTarefa(${t.id},'${escJS(c)}')">${colLabel[c]}</button>`).join("")}
               <button class="icon-btn del" onclick="delTarefa(${t.id})" style="margin-left:auto">${IC.trash}</button>
             </div>
           </div>`).join("")}
@@ -4783,7 +4787,7 @@ function vProfissionais(){
         <div style="font-weight:500;font-size:14px">${esc(p.nome)} ${!p.ativo?'<span class="pill" style="background:#f1f5f9;color:#94a3b8;border-color:#e2e8f0">Inativo</span>':""}</div>
         <div class="meta">${esc(p.especialidade)||"Sem especialidade"}${p.cro?" · CRO "+esc(p.cro):""}${p.email?" · "+esc(p.email):""}</div>
       </div>
-      <div id="prof-sig-${p.id}" onclick="abrirAssinaturaModal('profissional','${p.id}','${esc(p.nome)}')" title="Assinatura digital" style="width:40px;height:32px;border:1px solid var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;background:#f8fafc">
+      <div id="prof-sig-${p.id}" onclick="abrirAssinaturaModal('profissional','${escJS(p.id)}','${escJS(p.nome)}')" title="Assinatura digital" style="width:40px;height:32px;border:1px solid var(--line);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:15px;cursor:pointer;background:#f8fafc">
         ${ASSINATURA_PROF_CACHE[p.id]?`<img src="${ASSINATURA_PROF_CACHE[p.id]}" style="width:100%;height:100%;object-fit:contain;background:#fff">`:"✍️"}
       </div>
       <div class="prof-dot" style="background:${p.cor};width:14px;height:14px;border-radius:50%"></div>
@@ -4837,7 +4841,7 @@ function vSettings(){
         <div style="font-weight:500;font-size:14px">${esc(AUTH_NOME)||"Usuário"}</div>
         <div class="meta">Sessão ativa neste dispositivo</div>
       </div>
-      <button class="btn ghost sm" onclick="openUsuariosModal()">Gerenciar equipe</button>
+      ${AUTH_IS_CLINICAADMIN?`<button class="btn ghost sm" onclick="openUsuariosModal()">Gerenciar equipe</button>`:""}
       <button class="btn danger-link sm" onclick="logout()">Sair</button>
     </div>
   </div>
@@ -4962,11 +4966,11 @@ function vSettings(){
     <label class="f"><span>Aniversário — {nome}</span><textarea id="s-bday" rows="3">${esc(s.msgAniversario||"")}</textarea></label>
   </div>
   <div class="card" style="margin-bottom:12px"><h2>Backup</h2>
-    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">🛡️ Backup automático diário às 3h (horário de Brasília), guardado no Supabase Storage com os últimos ${30} mantidos. Você também pode gerar um agora ou exportar/importar manualmente.</p>
+    <p style="font-size:13px;color:var(--mut);margin-bottom:12px">🛡️ Backup clínico diário, com os últimos ${30} mantidos. Inclui registros e até 8 MiB de arquivos, sem contas de acesso ou configuração da plataforma. A importação aceita o formato versão 2.</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <button class="btn sm" onclick="backupAgora()">🛡️ Fazer backup agora</button>
       <button class="btn ghost sm" onclick="exportBackup()">${IC.upload} Exportar backup (.json)</button>
-      <button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>
+      ${AUTH_IS_CLINICAADMIN?`<button class="btn ghost sm" onclick="document.getElementById('importFile').click()">${IC.upload} Importar backup (.json)</button>`:""}
     </div>
     <input type="file" id="importFile" accept=".json" style="display:none" onchange="importBackup(this)">
   </div>
@@ -5056,10 +5060,10 @@ async function importBackup(input){
   reader.onload=async()=>{
     try{
       const d=JSON.parse(reader.result);
-      if(!d.patients||!d.appointments) throw 0;
+      if(d.backupVersion!==2) throw new Error("Backup antigo ou incompleto. Use um backup clínico versão 2.");
       await api("POST","/import",d);
       await reloadAll(); toast("Backup importado com sucesso!");
-    }catch(e){ toast("Arquivo inválido."); }
+    }catch(e){ toast(e.message||"Arquivo inválido."); }
   };
   reader.readAsText(f); input.value="";
 }
@@ -5259,7 +5263,7 @@ async function resendVerification(email){
 }
 async function logout(){
   try{ await api("POST","/auth/logout"); }catch(e){}
-  AUTH_TOKEN=""; AUTH_NOME=""; AUTH_IS_SUPERADMIN=false;
+  AUTH_TOKEN=""; AUTH_NOME=""; AUTH_IS_SUPERADMIN=false; AUTH_IS_CLINICAADMIN=false;
   MINHA_CLINICA = { nome:"", responsavelTecnico:"", croResponsavel:"", cnpj:"", enderecoCompleto:"", telefoneWhatsapp:"", email:"", logoUrl:null };
   localStorage.removeItem("crm_token"); localStorage.removeItem("crm_nome");
   showLogin();
@@ -5274,7 +5278,7 @@ async function openUsuariosModal(){
           <div style="font-weight:500;font-size:14px">${esc(u.nome)} ${!u.ativo?'<span class="pill p-cancelado">Inativo</span>':""}</div>
           <div class="meta">${esc(u.login)}</div>
         </div>
-        <button class="btn ghost sm" onclick="openUsuarioForm(${u.id},'${esc(u.nome)}','${esc(u.login)}',${u.ativo})">Editar</button>
+        <button class="btn ghost sm" onclick="openUsuarioForm(${u.id},'${escJS(u.nome)}','${escJS(u.login)}',${u.ativo})">Editar</button>
       </div>`).join("")}
     <div class="acts" style="justify-content:space-between;margin-top:12px">
       <button class="btn ghost" onclick="closeModal()">Fechar</button>
@@ -5283,8 +5287,8 @@ async function openUsuariosModal(){
 }
 function openUsuarioForm(id, nome, login, ativo){
   modal(id?"Editar usuário":"Novo usuário",`
-    <label class="f"><span>Nome *</span><input id="u-nome" value="${nome||""}"></label>
-    <label class="f"><span>Login *</span><input id="u-login" value="${login||""}" placeholder="E-mail, ou só um nome de usuário (ex: maria)"></label>
+    <label class="f"><span>Nome *</span><input id="u-nome" value="${esc(nome||"")}"></label>
+    <label class="f"><span>Login *</span><input id="u-login" value="${esc(login||"")}" placeholder="E-mail, ou só um nome de usuário (ex: maria)"></label>
     <p class="meta" style="margin:-6px 0 11px">Pode ser o e-mail da pessoa, ou só um nome simples pra quem não usa e-mail no dia a dia — tipo "recepcao" ou o primeiro nome dela.</p>
     <label class="f"><span>${id?"Nova senha (deixe vazio para manter)":"Senha * (mínimo 8 caracteres)"}</span>
       <div style="position:relative">

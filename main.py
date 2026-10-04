@@ -10,6 +10,7 @@ import json
 import base64
 import os
 import random
+import re
 import secrets
 import time
 import unicodedata
@@ -33,9 +34,19 @@ from pywebpush import webpush, WebPushException
 from sqlalchemy import or_
 
 from database import SessionLocal, init_db
+from backup_service import export_records, include_files, restore_records
 from models import AnamneseModelo, AnamnesePergunta, AnamneseRemota, Anexo, AssinaturaClinica, Clinica, Config, ConsentimentoMidia, ConsentimentoOrcamento, Consulta, Despesa, DocumentoEmitido, Evolucao, FeedbackSAC, Lancamento, MensagemChat, NotificacaoEnviada, OdontogramaMarca, Orcamento, OrcamentoItem, Paciente, Pesquisa, Plataforma, PlanoSaaS, Profissional, PushSubscription, RetornoConfig, Sessao, Tarefa, Usuario
 
 app = FastAPI(title="CRM Moura — Backend v2.9 (multi-tenant: fundação)")
+
+
+class CRMModel(BaseModel):
+    @field_validator("id", check_fields=False)
+    @classmethod
+    def validate_id(cls, value):
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", str(value)):
+            raise ValueError("ID inválido.")
+        return value
 
 app.add_middleware(
     CORSMiddleware,
@@ -173,14 +184,14 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-class SetupIn(BaseModel):
+class SetupIn(CRMModel):
     nome: str
     email: str
     senha: str
     clinicaNome: str = ""  # nome da clínica; se vazio, usa um padrão
 
 
-class LoginIn(BaseModel):
+class LoginIn(CRMModel):
     login: str  # e-mail OU nome de usuário — auth_login tenta os dois
     senha: str
 
@@ -218,7 +229,7 @@ def auth_setup(data: SetupIn):
         db.add(AssinaturaClinica(clinicaId=clinica.id, status="ativa"))
         u = Usuario(
             clinicaId=clinica.id, nome=data.nome.strip(), email=data.email.strip().lower(),
-            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=True,
+            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=True, isClinicaAdmin=True,
         )
         db.add(u)
         db.commit()
@@ -263,7 +274,7 @@ def auth_login(data: LoginIn):
         return {"token": token, "nome": u.nome}
 
 
-class SignupIn(BaseModel):
+class SignupIn(CRMModel):
     clinicaNome: str
     nome: str
     email: str
@@ -316,7 +327,7 @@ def signup(data: SignupIn):
         token = secrets.token_urlsafe(32)
         u = Usuario(
             clinicaId=clinica.id, nome=data.nome.strip(), email=email,
-            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=False,
+            senhaHash=_hash_senha(data.senha), ativo=True, isSuperAdmin=False, isClinicaAdmin=True,
             emailVerificado=False, emailVerifyToken=token,
         )
         db.add(u)
@@ -339,7 +350,7 @@ def verify_email(token: str):
         return {"token": sessao_token, "nome": u.nome}
 
 
-class ResendVerificationIn(BaseModel):
+class ResendVerificationIn(CRMModel):
     email: str
 
 
@@ -379,7 +390,7 @@ def auth_me(request: Request):
         u = _usuario_do_token(db, token)
         if not u:
             raise HTTPException(401, "Não autenticado.")
-        return {"id": u.id, "nome": u.nome, "email": u.email, "clinicaId": u.clinicaId, "isSuperAdmin": u.isSuperAdmin}
+        return {"id": u.id, "nome": u.nome, "email": u.email, "clinicaId": u.clinicaId, "isSuperAdmin": u.isSuperAdmin, "isClinicaAdmin": u.isClinicaAdmin}
 
 
 # ── gestão de usuários (escopada por clínica; qualquer usuário logado, equipe pequena) ──
@@ -402,7 +413,7 @@ def _usuario_logado(request: Request) -> Usuario:
         return u
 
 
-class UsuarioIn(BaseModel):
+class UsuarioIn(CRMModel):
     nome: str
     login: str  # e-mail (se tiver "@") ou nome de usuário simples — a mesma caixa serve pros dois
     senha: str | None = None  # obrigatória ao criar; opcional ao editar (troca)
@@ -437,6 +448,8 @@ def list_usuarios(request: Request):
 @app.post("/api/usuarios", status_code=201)
 def create_usuario(data: UsuarioIn, request: Request):
     quem = _usuario_logado(request)
+    if not (quem.isSuperAdmin or quem.isClinicaAdmin):
+        raise HTTPException(403, "Somente administradores podem gerenciar a equipe.")
     if not data.senha or len(data.senha) < 8:
         raise HTTPException(422, "A senha precisa de pelo menos 8 caracteres.")
     email, username = _parse_login(data.login)
@@ -459,11 +472,20 @@ def create_usuario(data: UsuarioIn, request: Request):
 @app.put("/api/usuarios/{uid}")
 def update_usuario(uid: int, data: UsuarioIn, request: Request):
     quem = _usuario_logado(request)
+    if not (quem.isSuperAdmin or quem.isClinicaAdmin):
+        raise HTTPException(403, "Somente administradores podem gerenciar a equipe.")
     with SessionLocal() as db:
         u = db.get(Usuario, uid)
         if not u or u.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Usuário não encontrado")
+        if u.isSuperAdmin and not quem.isSuperAdmin:
+            raise HTTPException(403, "A conta da plataforma exige um administrador da plataforma.")
         if not data.ativo and u.ativo:
+            if u.isSuperAdmin or u.isClinicaAdmin:
+                admins = db.query(Usuario).filter(Usuario.clinicaId == u.clinicaId, Usuario.ativo == True,
+                                                or_(Usuario.isSuperAdmin == True, Usuario.isClinicaAdmin == True)).count()
+                if admins <= 1:
+                    raise HTTPException(409, "Não é possível desativar o último administrador da clínica.")
             ativos = db.query(Usuario).filter(Usuario.ativo == True, Usuario.clinicaId == u.clinicaId).count()  # noqa: E712
             if ativos <= 1:
                 raise HTTPException(409, "Não é possível desativar o último usuário ativo.")
@@ -498,7 +520,7 @@ def update_usuario(uid: int, data: UsuarioIn, request: Request):
 # antes de qualquer clínica ser identificada. PUT e upload de logo exigem
 # login E isSuperAdmin, verificado manualmente dentro de cada handler (o
 # middleware não distingue métodos, só prefixo de caminho).
-class PlataformaIn(BaseModel):
+class PlataformaIn(CRMModel):
     nome: str
 
 
@@ -544,7 +566,7 @@ def list_clinicas(request: Request):
 # PLANOS SAAS E ASSINATURA DA PLATAFORMA  (o que cada clínica paga pra usar o
 # sistema — cobrança recorrente via Mercado Pago; só o superadmin mexe aqui)
 # ══════════════════════════════════════════════════════════════════════════════
-class PlanoSaaSIn(BaseModel):
+class PlanoSaaSIn(CRMModel):
     nome: str
     valor: int  # centavos, mensal
     limitePacientes: int | None = None
@@ -581,7 +603,7 @@ def confirmar_emails_clinica(cid: int, request: Request):
 FEEDBACK_CATEGORIAS_VALIDAS = {"bug", "sugestao", "duvida", "outro"}
 
 
-class FeedbackIn(BaseModel):
+class FeedbackIn(CRMModel):
     categoria: str
     titulo: str
     mensagem: str
@@ -654,7 +676,7 @@ def list_feedback_admin(request: Request):
         return result
 
 
-class ResponderFeedbackIn(BaseModel):
+class ResponderFeedbackIn(CRMModel):
     resposta: str = ""
     status: str = "respondido"  # respondido | fechado | aberto (reabrir)
 
@@ -714,7 +736,7 @@ def update_plano_saas(pid: str, data: PlanoSaaSIn, request: Request):
         return _row(p)
 
 
-class AtribuirPlanoIn(BaseModel):
+class AtribuirPlanoIn(CRMModel):
     planoId: str | None = None  # None = tira a clínica de qualquer plano (volta pro trial, sem cobrança)
 
 
@@ -740,7 +762,7 @@ def set_plano_clinica(cid: int, data: AtribuirPlanoIn, request: Request):
         return {"ok": True}
 
 
-class BloquearClinicaIn(BaseModel):
+class BloquearClinicaIn(CRMModel):
     bloquear: bool
 
 
@@ -762,7 +784,7 @@ def bloquear_clinica(cid: int, data: BloquearClinicaIn, request: Request):
         return {"ok": True, "bloqueadaManualmente": a.bloqueadaManualmente}
 
 
-class AtivarClinicaIn(BaseModel):
+class AtivarClinicaIn(CRMModel):
     ativa: bool
 
 
@@ -818,6 +840,7 @@ def _apagar_storage_da_clinica(cid: int):
         f"{cid}/", f"_fotos/{cid}/", f"_despesas/{cid}/", f"_assinaturas/{cid}/",
         f"_assinaturas_anamnese/{cid}/", f"_consentimentos/{cid}/",
         f"_consentimentos_orcamento/{cid}/", f"_backups/{cid}/",
+        f"clinicas/{cid}/imports/",
     ]
     for prefixo in prefixos_com_pasta:
         try:
@@ -859,6 +882,7 @@ def excluir_clinica(cid: int, request: Request):
         ids_usuarios = [u.id for u in db.query(Usuario.id).filter(Usuario.clinicaId == cid).all()]
         if ids_usuarios:
             db.query(Sessao).filter(Sessao.usuarioId.in_(ids_usuarios)).delete(synchronize_session=False)
+        db.query(FeedbackSAC).filter(FeedbackSAC.clinicaId == cid).delete(synchronize_session=False)
         db.query(Usuario).filter(Usuario.clinicaId == cid).delete(synchronize_session=False)
         # Tabelas que referenciam profissionais.id — precisam sumir antes do Profissional
         for Modelo in (Consulta, Tarefa, Lancamento, Evolucao, OdontogramaMarca, ConsentimentoMidia,
@@ -1009,7 +1033,7 @@ def set_plataforma(data: PlataformaIn, request: Request):
 ASSINATURA_MAX_BYTES = 2 * 1024 * 1024  # 2 MB — assinatura/logo é simples, nunca deveria chegar perto disso
 
 
-class AssinaturaIn(BaseModel):
+class AssinaturaIn(CRMModel):
     dataUrl: str  # data URL do canvas/imagem, ex: "data:image/png;base64,iVBORw0KG..."
 
 
@@ -1051,7 +1075,7 @@ def upload_logo_plataforma(data: AssinaturaIn, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # PERFIL DO CONSULTÓRIO  (dados da própria clínica; qualquer usuário logado vê e edita)
 # ══════════════════════════════════════════════════════════════════════════════
-class ClinicaPerfilIn(BaseModel):
+class ClinicaPerfilIn(CRMModel):
     nome: str
     responsavelTecnico: str = ""
     croResponsavel: str = ""
@@ -1195,6 +1219,21 @@ def _prof_da_clinica(db, prof_id: int | None, clinica_id: int) -> bool:
     return bool(prof and prof.clinicaId == clinica_id)
 
 
+def _paciente_da_clinica(db, patient_id: str, clinica_id: int):
+    paciente = db.get(Paciente, patient_id)
+    if not paciente or paciente.clinicaId != clinica_id:
+        raise HTTPException(404, "Paciente não encontrado")
+    return paciente
+
+
+def _consulta_do_paciente(db, appointment_id: str | None, patient_id: str, clinica_id: int):
+    if not appointment_id:
+        return
+    consulta = db.get(Consulta, appointment_id)
+    if not consulta or consulta.clinicaId != clinica_id or consulta.patientId != patient_id:
+        raise HTTPException(404, "Consulta não encontrada para este paciente")
+
+
 def _plano_da_clinica(db, clinica_id: int) -> PlanoSaaS | None:
     """Plano de assinatura ATUAL da clínica (o que ela paga pra usar o
     sistema), ou None se não estiver em nenhum plano com limite (trial sem
@@ -1245,7 +1284,7 @@ def _consulta_conflitante(db, data: "ConsultaIn", clinica_id: int, exclude_id: s
 # ══════════════════════════════════════════════════════════════════════════════
 # PROFISSIONAIS
 # ══════════════════════════════════════════════════════════════════════════════
-class ProfissionalIn(BaseModel):
+class ProfissionalIn(CRMModel):
     nome: str
     cro: str = ""
     especialidade: str = ""
@@ -1299,6 +1338,12 @@ def delete_profissional(pid: int, request: Request):
         p = db.get(Profissional, pid)
         if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
+        from models import Base
+        for tabela in Base.metadata.tables.values():
+            for fk in tabela.foreign_keys:
+                if fk.target_fullname == "profissionais.id":
+                    if db.execute(tabela.select().where(fk.parent == pid).limit(1)).first():
+                        raise HTTPException(409, "Este profissional possui registros vinculados. Desative-o para preservar o histórico.")
         db.delete(p)
         db.commit()
 
@@ -1306,7 +1351,7 @@ def delete_profissional(pid: int, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # PACIENTES
 # ══════════════════════════════════════════════════════════════════════════════
-class PacienteIn(BaseModel):
+class PacienteIn(CRMModel):
     id: str | None = None
     name: str
     phone: str = ""
@@ -1401,6 +1446,11 @@ def delete_patient(pid: str, request: Request):
         p = db.get(Paciente, pid)
         if not p or p.clinicaId != quem.clinicaId:
             raise HTTPException(404)
+        from models import Base
+        for tabela in Base.metadata.tables.values():
+            if "patientId" in tabela.c:
+                if db.execute(tabela.select().where(tabela.c.patientId == pid).limit(1)).first():
+                    raise HTTPException(409, "Este paciente possui registros vinculados e não pode ser excluído.")
         db.query(Consulta).filter(Consulta.patientId == pid).delete()
         db.delete(p)
         db.commit()
@@ -1573,7 +1623,7 @@ def get_portal_paciente(token: str):
         }
 
 
-class PortalPixIn(BaseModel):
+class PortalPixIn(CRMModel):
     lancamentoIds: list[str]
 
 
@@ -1738,7 +1788,7 @@ def list_anamnese_modelos(request: Request):
         return [_modelo_row(db, m) for m in modelos]
 
 
-class AnamneseRespostasIn(BaseModel):
+class AnamneseRespostasIn(CRMModel):
     """Corpo enviado pelo PRÓPRIO paciente (rota pública, sem login)."""
     birth: str | None = None
     rg: str = ""
@@ -1778,7 +1828,7 @@ class AnamneseRespostasIn(BaseModel):
         return v
 
 
-class AnamneseRemotaCriarIn(BaseModel):
+class AnamneseRemotaCriarIn(CRMModel):
     modeloId: str
 
 
@@ -1941,7 +1991,7 @@ def get_anamnese_detalhe(aid: str, request: Request):
         }
 
 
-class AprovarAnamneseIn(BaseModel):
+class AprovarAnamneseIn(CRMModel):
     profissionalId: int
     # Campos revisados (possivelmente editados pela equipe) — mesmo shape de AnamneseRespostasIn.
     birth: str | None = None
@@ -2193,7 +2243,7 @@ def delete_anamnese(aid: str, request: Request):
 DOCUMENTO_TIPOS_VALIDOS = {"prescricao", "atestado", "recibo"}
 
 
-class DocumentoIn(BaseModel):
+class DocumentoIn(CRMModel):
     profissionalId: int
     tipo: str
     # prescrição:
@@ -2304,7 +2354,7 @@ def delete_documento(did: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # CONSULTAS  (com profissional, prontuário, orçamento, duração)
 # ══════════════════════════════════════════════════════════════════════════════
-class ConsultaIn(BaseModel):
+class ConsultaIn(CRMModel):
     id: str | None = None
     patientId: str
     profissionalId: int | None = None
@@ -2416,6 +2466,7 @@ def update_appointment(aid: str, data: ConsultaIn, request: Request):
         a = db.get(Consulta, aid)
         if not a or a.clinicaId != quem.clinicaId:
             raise HTTPException(404)
+        _paciente_da_clinica(db, data.patientId, quem.clinicaId)
         if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
             raise HTTPException(404, "Profissional não encontrado")
         conflito = _consulta_conflitante(db, data, quem.clinicaId, exclude_id=aid)
@@ -2448,7 +2499,7 @@ def delete_appointment(aid: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # PESQUISAS NPS
 # ══════════════════════════════════════════════════════════════════════════════
-class PesquisaIn(BaseModel):
+class PesquisaIn(CRMModel):
     id: str | None = None
     appointmentId: str
     patientId: str
@@ -2473,6 +2524,7 @@ def create_survey(data: PesquisaIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        _consulta_do_paciente(db, data.appointmentId, data.patientId, quem.clinicaId)
         db.query(Pesquisa).filter(Pesquisa.appointmentId == data.appointmentId, Pesquisa.clinicaId == quem.clinicaId).delete()
         s = Pesquisa(**{k: v for k, v in data.model_dump().items() if k != "id"}, id=sid, clinicaId=quem.clinicaId)
         db.add(s)
@@ -2488,6 +2540,8 @@ def update_survey(sid: str, data: PesquisaIn, request: Request):
         s = db.get(Pesquisa, sid)
         if not s or s.clinicaId != quem.clinicaId:
             raise HTTPException(404)
+        _paciente_da_clinica(db, data.patientId, quem.clinicaId)
+        _consulta_do_paciente(db, data.appointmentId, data.patientId, quem.clinicaId)
         for k, v in data.model_dump(exclude={"id"}).items():
             setattr(s, k, v)
         db.commit()
@@ -2498,7 +2552,7 @@ def update_survey(sid: str, data: PesquisaIn, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # TAREFAS  (kanban: pendente | em_andamento | concluida)
 # ══════════════════════════════════════════════════════════════════════════════
-class TarefaIn(BaseModel):
+class TarefaIn(CRMModel):
     titulo: str
     descricao: str = ""
     status: str = "pendente"
@@ -2558,6 +2612,8 @@ def update_tarefa(tid: int, data: TarefaIn, request: Request):
         t = db.get(Tarefa, tid)
         if not t or t.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Tarefa não encontrada")
+        if data.patientId:
+            _paciente_da_clinica(db, data.patientId, quem.clinicaId)
         if not _prof_da_clinica(db, data.responsavelId, quem.clinicaId):
             raise HTTPException(404, "Responsável não encontrado")
         for k, v in data.model_dump().items():
@@ -2581,7 +2637,7 @@ def delete_tarefa(tid: int, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # CHAT DA EQUIPE
 # ══════════════════════════════════════════════════════════════════════════════
-class MensagemIn(BaseModel):
+class MensagemIn(CRMModel):
     profissionalId: int
     canal: str = "geral"
     conteudo: str
@@ -2700,7 +2756,7 @@ def save_settings(data: dict[str, str], request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # PUSH NOTIFICATIONS
 # ══════════════════════════════════════════════════════════════════════════════
-class PushSubIn(BaseModel):
+class PushSubIn(CRMModel):
     endpoint: str
     keys: dict[str, str]
     profissionalId: int | None = None
@@ -2743,7 +2799,7 @@ def push_subscribe(data: PushSubIn, request: Request):
         return {"ok": True, "created": True}
 
 
-class PushUnsubIn(BaseModel):
+class PushUnsubIn(CRMModel):
     endpoint: str
 
 
@@ -2779,7 +2835,7 @@ def _enviar_push(subscription: PushSubscription, title: str, body: str, url: str
         return False
 
 
-class PushTestIn(BaseModel):
+class PushTestIn(CRMModel):
     profissionalId: int | None = None
 
 
@@ -3045,7 +3101,7 @@ def anexo_url(aid: str, request: Request):
         return {"url": _sb_signed_url(a.storagePath), "nome": a.nome, "mimeType": a.mimeType}
 
 
-class AnexoRenameIn(BaseModel):
+class AnexoRenameIn(CRMModel):
     nome: str
 
 
@@ -3304,7 +3360,7 @@ STATUS_FACE = {"higido", "cariado", "restaurado", "fraturado"}
 STATUS_DENTE = {"ausente", "a_extrair", "implante", "coroa", "canal", "protese", "nenhum"}
 
 
-class OdontogramaMarcaIn(BaseModel):
+class OdontogramaMarcaIn(CRMModel):
     patientId: str
     profissionalId: int
     dente: str
@@ -3404,7 +3460,7 @@ TIPOS_CONSENTIMENTO_MIDIA = {
 }
 
 
-class ConsentimentoMidiaIn(BaseModel):
+class ConsentimentoMidiaIn(CRMModel):
     patientId: str
     profissionalId: int
     autorizados: list[str]  # tipos que devem ficar "autorizado"; os demais tipos válidos ficam "revogado"
@@ -3499,7 +3555,7 @@ def get_assinatura_consentimento(cid: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # PRONTUÁRIO  (evoluções clínicas IMUTÁVEIS: apenas criação e leitura)
 # ══════════════════════════════════════════════════════════════════════════════
-class EvolucaoIn(BaseModel):
+class EvolucaoIn(CRMModel):
     patientId: str
     profissionalId: int
     denteRegiao: str = ""
@@ -3564,14 +3620,14 @@ def create_evolucao(data: EvolucaoIn, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # ORÇAMENTOS  (plano de tratamento; itens em CENTAVOS; aprovado -> gera cobranças)
 # ══════════════════════════════════════════════════════════════════════════════
-class OrcItemIn(BaseModel):
+class OrcItemIn(CRMModel):
     procedimento: str
     denteRegiao: str = ""
     quantidade: int = 1
     valor: int = 0  # centavos, unitário
 
 
-class OrcamentoIn(BaseModel):
+class OrcamentoIn(CRMModel):
     patientId: str
     profissionalId: int | None = None
     data: str
@@ -3712,7 +3768,7 @@ def update_orcamento(oid: str, data: OrcamentoIn, request: Request):
         return _orc_row(db, o, com_itens=True)
 
 
-class OrcStatusIn(BaseModel):
+class OrcStatusIn(CRMModel):
     status: str
 
 
@@ -3734,7 +3790,7 @@ def set_orcamento_status(oid: str, data: OrcStatusIn, request: Request):
         return _orc_row(db, o)
 
 
-class AprovarOrcamentoIn(BaseModel):
+class AprovarOrcamentoIn(CRMModel):
     profissionalId: int
     assinaturaPaciente: str  # dataUrl base64 PNG
     assinaturaProfissional: str  # dataUrl base64 PNG
@@ -3823,7 +3879,7 @@ def get_assinatura_profissional_orcamento(cid: str, request: Request):
     return {"url": url}
 
 
-class GerarCobrancasIn(BaseModel):
+class GerarCobrancasIn(CRMModel):
     parcelas: int = 1
     vencimento: str  # 1º vencimento
 
@@ -3885,7 +3941,7 @@ def delete_orcamento(oid: str, request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # RETORNOS PREVENTIVOS  (recall clínico: paciente deve voltar N meses após a última visita)
 # ══════════════════════════════════════════════════════════════════════════════
-class RetornoIn(BaseModel):
+class RetornoIn(CRMModel):
     meses: int | None = None  # None = usa o padrão da clínica
 
 
@@ -3978,7 +4034,7 @@ def list_retornos(request: Request):
 # ══════════════════════════════════════════════════════════════════════════════
 # FINANCEIRO  (lançamentos: cobranças e parcelas; valor em CENTAVOS)
 # ══════════════════════════════════════════════════════════════════════════════
-class LancamentoIn(BaseModel):
+class LancamentoIn(CRMModel):
     id: str | None = None
     patientId: str
     profissionalId: int | None = None
@@ -4039,6 +4095,7 @@ def create_lancamento(data: LancamentoIn, request: Request):
         pac = db.get(Paciente, data.patientId)
         if not pac or pac.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Paciente não encontrado")
+        _consulta_do_paciente(db, data.appointmentId, data.patientId, quem.clinicaId)
         if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
             raise HTTPException(404, "Profissional não encontrado")
         criados = []
@@ -4076,6 +4133,10 @@ def update_lancamento(lid: str, data: LancamentoIn, request: Request):
         l = db.get(Lancamento, lid)
         if not l or l.clinicaId != quem.clinicaId:
             raise HTTPException(404, "Lançamento não encontrado")
+        _paciente_da_clinica(db, data.patientId, quem.clinicaId)
+        if data.valor <= 0:
+            raise HTTPException(422, "Informe um valor maior que zero.")
+        _consulta_do_paciente(db, data.appointmentId, data.patientId, quem.clinicaId)
         if not _prof_da_clinica(db, data.profissionalId, quem.clinicaId):
             raise HTTPException(404, "Profissional não encontrado")
         for k, v in data.model_dump(exclude={"id", "parcelas"}).items():
@@ -4085,7 +4146,7 @@ def update_lancamento(lid: str, data: LancamentoIn, request: Request):
         return _lanc_row(db, l)
 
 
-class ReceberIn(BaseModel):
+class ReceberIn(CRMModel):
     formaPagamento: str = "dinheiro"
     pagoEm: str | None = None  # default: hoje
     valorRecebido: int | None = None  # centavos; None = valor cheio da parcela
@@ -4102,7 +4163,9 @@ def receber_lancamento(lid: str, data: ReceberIn, request: Request):
             raise HTTPException(404, "Lançamento não encontrado")
         if l.pagoEm:
             raise HTTPException(409, "Este lançamento já está pago.")
-        recebido = data.valorRecebido if (data.valorRecebido and data.valorRecebido > 0) else l.valor
+        if data.valorRecebido is not None and data.valorRecebido <= 0:
+            raise HTTPException(422, "O valor recebido precisa ser maior que zero.")
+        recebido = l.valor if data.valorRecebido is None else data.valorRecebido
         if recebido > l.valor:
             raise HTTPException(422, "O valor recebido não pode ser maior que a parcela.")
         restante_id = None
@@ -4158,24 +4221,24 @@ def delete_lancamento(lid: str, request: Request):
 # DUMP / IMPORT
 # ══════════════════════════════════════════════════════════════════════════════
 def _dump_data(db, clinica_id: int) -> dict:
-    return {
-        "patients": [_row(p) for p in db.query(Paciente).filter(Paciente.clinicaId == clinica_id).all()],
-        "appointments": [_row(a) for a in db.query(Consulta).filter(Consulta.clinicaId == clinica_id).all()],
-        "surveys": [_row(s) for s in db.query(Pesquisa).filter(Pesquisa.clinicaId == clinica_id).all()],
-        "profissionais": [_row(p) for p in db.query(Profissional).filter(Profissional.clinicaId == clinica_id).all()],
-        "tarefas": [_row(t) for t in db.query(Tarefa).filter(Tarefa.clinicaId == clinica_id).all()],
-        "lancamentos": [_row(l) for l in db.query(Lancamento).filter(Lancamento.clinicaId == clinica_id).all()],
-        "evolucoes": [{**_row(e), "created_at": e.created_at.isoformat() if e.created_at else None}
-                      for e in db.query(Evolucao).filter(Evolucao.clinicaId == clinica_id).all()],
-        "orcamentos": [_row(o) for o in db.query(Orcamento).filter(Orcamento.clinicaId == clinica_id).all()],
-        "orcamento_itens": [_row(i) for i in db.query(OrcamentoItem).filter(OrcamentoItem.clinicaId == clinica_id).all()],
-        "anexos": [{**_row(a), "created_at": a.created_at.isoformat() if a.created_at else None}
-                   for a in db.query(Anexo).filter(Anexo.clinicaId == clinica_id).all()],
-        "retorno_config": [_row(r) for r in db.query(RetornoConfig).filter(RetornoConfig.clinicaId == clinica_id).all()],
-        "despesas": [{**_row(d), "created_at": d.created_at.isoformat() if d.created_at else None}
-                     for d in db.query(Despesa).filter(Despesa.clinicaId == clinica_id).all()],
-        "settings": {c.key: c.value for c in db.query(Config).filter(Config.clinicaId == clinica_id).all()},
-    }
+    data = export_records(db, clinica_id)
+    data["signatures"] = []
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        for tipo, group in (("paciente", "patients"), ("profissional", "profissionais")):
+            existing = set(_sb_list(f"_assinaturas/{clinica_id}/{tipo}", strict=True))
+            for row in data[group]:
+                filename = str(row["id"]) + ".png"
+                if filename in existing:
+                    data["signatures"].append({"type": tipo, "id": row["id"], "path": _path_assinatura(clinica_id, tipo, row["id"])})
+    return include_files(data, _backup_download)
+
+
+def _backup_download(path):
+    _sb_configurado()
+    r = requests.get(_sb_signed_url(path), timeout=60)
+    if r.status_code != 200:
+        raise HTTPException(502, "Não foi possível incluir um arquivo no backup.")
+    return r.content, r.headers.get("Content-Type", "application/octet-stream")
 
 
 @app.get("/api/dump")
@@ -4185,7 +4248,7 @@ def dump(request: Request):
         return _dump_data(db, quem.clinicaId)
 
 
-def _sb_list(prefixo: str) -> list[str]:
+def _sb_list(prefixo: str, strict: bool = False) -> list[str]:
     """Lista nomes de arquivos numa pasta do bucket (mais recentes primeiro)."""
     r = requests.post(
         f"{SUPABASE_URL}/storage/v1/object/list/{ANEXO_BUCKET}",
@@ -4194,6 +4257,8 @@ def _sb_list(prefixo: str) -> list[str]:
         timeout=30,
     )
     if r.status_code != 200:
+        if strict:
+            raise HTTPException(502, "Não foi possível verificar os arquivos do backup.")
         return []
     return [o["name"] for o in r.json() if o.get("name")]
 
@@ -4207,6 +4272,8 @@ def _fazer_backup(clinica_id: int) -> str:
     with SessionLocal() as db:
         data = _dump_data(db, clinica_id)
     blob = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
+    if len(blob) > ANEXO_MAX_BYTES:
+        raise HTTPException(413, "O backup excede o limite do bucket. Exporte os arquivos separadamente.")
     nome = f"backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
     _sb_upload(f"_backups/{clinica_id}/{nome}", blob, "application/json")
     for velho in _sb_list(f"_backups/{clinica_id}")[BACKUP_RETENCAO:]:
@@ -4246,35 +4313,10 @@ def list_backups(request: Request):
     return {"arquivos": _sb_list(f"_backups/{quem.clinicaId}")[:BACKUP_RETENCAO]}
 
 
-class DumpIn(BaseModel):
-    patients: list[dict] = []
-    appointments: list[dict] = []
-    surveys: list[dict] = []
-    lancamentos: list[dict] = []
-    settings: dict[str, Any] = {}
-
-
 @app.post("/api/import")
-def import_dump(data: DumpIn, request: Request):
+def import_dump(data: dict[str, Any], request: Request):
     quem = _usuario_logado(request)
+    if not (quem.isSuperAdmin or quem.isClinicaAdmin):
+        raise HTTPException(403, "Somente administradores podem importar backups.")
     with SessionLocal() as db:
-        for p in data.patients:
-            if not db.get(Paciente, p["id"]):
-                db.add(Paciente(**{k: v for k, v in p.items() if hasattr(Paciente, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
-        for a in data.appointments:
-            if not db.get(Consulta, a["id"]):
-                db.add(Consulta(**{k: v for k, v in a.items() if hasattr(Consulta, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
-        for s in data.surveys:
-            if not db.get(Pesquisa, s["id"]):
-                db.add(Pesquisa(**{k: v for k, v in s.items() if hasattr(Pesquisa, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
-        for l in data.lancamentos:
-            if not db.get(Lancamento, l["id"]):
-                db.add(Lancamento(**{k: v for k, v in l.items() if hasattr(Lancamento, k) and k != "clinicaId"}, clinicaId=quem.clinicaId))
-        for k, v in data.settings.items():
-            cfg = db.get(Config, (quem.clinicaId, k))
-            if cfg:
-                cfg.value = str(v)
-            else:
-                db.add(Config(clinicaId=quem.clinicaId, key=k, value=str(v)))
-        db.commit()
-    return {"ok": True, "patients": len(data.patients), "appointments": len(data.appointments)}
+        return restore_records(db, quem.clinicaId, data, _sb_upload, _sb_delete)

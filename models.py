@@ -321,6 +321,7 @@ class Usuario(Base):
     profissionalId: Mapped[int | None] = mapped_column(Integer, ForeignKey("profissionais.id"), nullable=True)
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     isSuperAdmin: Mapped[bool] = mapped_column(Boolean, default=False)  # acesso multi-clínica (plataforma)
+    isClinicaAdmin: Mapped[bool] = mapped_column(Boolean, default=False)
     emailVerificado: Mapped[bool] = mapped_column(Boolean, default=True)  # False só para cadastros públicos (Fase 4)
     emailVerifyToken: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
