@@ -461,7 +461,7 @@ const FACIAL_POSICOES = [
 ];
 
 /* ── utilidades ── */
-const PROCEDURES = ["Avaliação","Limpeza","Restauração","Canal","Extração","Clareamento","Ortodontia","Implante","Prótese","Outro"];
+const PROCEDURES = ["Avaliação","Limpeza","Restauração","Canal","Extração","Clareamento","Ortodontia","Implante","Prótese","Radiografias","Lembrete","Outro"];
 const STATUS = { agendado:"Agendado", confirmado:"Confirmado", concluido:"Concluído", faltou:"Faltou", cancelado:"Cancelado" };
 const STATUS_TAREFA = { pendente:"Pendente", em_andamento:"Em andamento", concluida:"Concluída" };
 const PRIO = { baixa:"Baixa", normal:"Normal", alta:"Alta" };
@@ -715,6 +715,16 @@ function enviarMensagemRapida(pid){
   window.open(wa(p.phone,texto),"_blank");
   closeModal();
 }
+function prontuarioKey(value){
+  const s=String(value||'').trim().toLowerCase();
+  return /^[0-9]+$/.test(s)?BigInt(s).toString():s;
+}
+function nextProntuario(){
+  const nums=DB.patients.map(p=>String(p.numProntuario||'').trim()).filter(s=>/^[0-9]+$/.test(s));
+  const max=nums.reduce((m,s)=>BigInt(s)>m?BigInt(s):m,0n);
+  const width=nums.reduce((m,s)=>s.startsWith('0')?Math.max(m,s.length):m,0);
+  return (max+1n).toString().padStart(width,'0');
+}
 function openPatientForm(id){
   const p = id ? pById(id) : {name:"",phone:"",email:"",birth:"",lastVisit:"",notes:"",numProntuario:"",
     rg:"",orgaoExpedidor:"",cpf:"",naturalidade:"",nacionalidade:"Brasileira",estadoCivil:"",profissao:"",localTrabalho:"",enderecoResidencial:"",indicadoPor:"",
@@ -727,7 +737,7 @@ function openPatientForm(id){
       <label class="f"><span>Nascimento</span><input type="date" id="f-birth" value="${p.birth||""}"></label>
     </div>
     <div class="grid g2">
-      <label class="f"><span>N° Prontuário</span><input id="f-pron" value="${esc(p.numProntuario||"")}" placeholder="Opcional"></label>
+      <label class="f"><span>N° Prontuário</span><input id="f-pron" value="${esc(id?(p.numProntuario||''):nextProntuario())}" placeholder="Opcional">${id?'':'<small class="meta">Próximo número da sequência disponível. Você pode alterá-lo.</small>'}</label>
       <label class="f"><span>Última visita</span><input type="date" id="f-last" value="${p.lastVisit||""}"></label>
     </div>
     <label class="f"><span>E-mail</span><input id="f-email" value="${esc(p.email)}"></label>
@@ -794,6 +804,8 @@ async function savePatient(id){
     alergias:g("f-alerg"),medicacoes:g("f-medic"),condicoesSistemicas:g("f-cond"),
   };
   if(!f.name || digits(f.phone).length<10){ toast("Preencha nome e telefone válido."); return; }
+  const duplicate=f.numProntuario&&DB.patients.some(p=>p.id!==id&&prontuarioKey(p.numProntuario)===prontuarioKey(f.numProntuario));
+  if(duplicate){toast('Este número de prontuário já está em uso. Escolha outro número.');document.getElementById('f-pron').focus();return;}
   if(id){
     await api("PUT",`/patients/${id}`,{...f,id});
     closeModal(); await reloadAll(); toast("Paciente salvo.");

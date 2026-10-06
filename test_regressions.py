@@ -13,6 +13,15 @@ from backup_service import GROUPS, export_records, include_files, restore_record
 
 
 class RegressionTests(unittest.TestCase):
+    def test_prontuario_duplicates_normalize_and_preserve_tenant_scope(self):
+        with self.sessions() as db:
+            db.get(m.Paciente, "p1").numProntuario = " 001 "
+            db.commit()
+        self.error(409, main.create_patient, main.PacienteIn(name="Duplicado", numProntuario="1"), None)
+        main.update_patient("p1", main.PacienteIn(name="Teste", numProntuario="001"), None)
+        self.who.clinicaId = 2
+        main.create_patient(main.PacienteIn(name="Outra clínica", numProntuario="1"), None)
+
     def test_appearance_settings_are_isolated_by_clinic(self):
         main.save_settings({"themePrimary": "#29a8f5"}, None)
         self.assertEqual(main.get_settings(None)["themePrimary"], "#29a8f5")

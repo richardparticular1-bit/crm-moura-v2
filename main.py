@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from pywebpush import webpush, WebPushException
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 
 from database import SessionLocal, init_db
 from backup_service import export_records, include_files, restore_records
@@ -1389,21 +1389,30 @@ def list_patients(request: Request):
         return [_row(p) for p in db.query(Paciente).filter(Paciente.clinicaId == quem.clinicaId).order_by(Paciente.name).all()]
 
 
+def _prontuario_key(value: str) -> str:
+    value = (value or "").strip().casefold()
+    return (value.lstrip("0") or "0") if re.fullmatch(r"[0-9]+", value) else value
+
+
 def _prontuario_duplicado(db, clinica_id: int, num_prontuario: str, exclude_id: str | None = None) -> Paciente | None:
     """Retorna o paciente que já usa esse número de prontuário na mesma
     clínica, ou None se estiver livre. Número vazio nunca é considerado
     duplicado — "ainda não atribuído" é um estado válido."""
-    num = (num_prontuario or "").strip()
+    num = _prontuario_key(num_prontuario)
     if not num:
         return None
-    q = db.query(Paciente).filter(Paciente.clinicaId == clinica_id, Paciente.numProntuario == num)
+    # Serializa cadastros/edições da mesma clínica, inclusive em servidores diferentes.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(73001, :clinic)"), {"clinic": clinica_id})
+    q = db.query(Paciente).filter(Paciente.clinicaId == clinica_id)
     if exclude_id:
         q = q.filter(Paciente.id != exclude_id)
-    return q.first()
+    return next((p for p in q.all() if _prontuario_key(p.numProntuario) == num), None)
 
 
 @app.post("/api/patients", status_code=201)
 def create_patient(data: PacienteIn, request: Request):
+    data.numProntuario = data.numProntuario.strip()
     quem = _usuario_logado(request)
     pid = data.id or _new_id()
     with SessionLocal() as db:
@@ -1424,6 +1433,7 @@ def create_patient(data: PacienteIn, request: Request):
 
 @app.put("/api/patients/{pid}")
 def update_patient(pid: str, data: PacienteIn, request: Request):
+    data.numProntuario = data.numProntuario.strip()
     quem = _usuario_logado(request)
     with SessionLocal() as db:
         p = db.get(Paciente, pid)

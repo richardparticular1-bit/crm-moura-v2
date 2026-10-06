@@ -1,0 +1,13 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const html=fs.readFileSync('frontend/index.html','utf8');
+const code=html.slice(html.indexOf('function prontuarioKey('),html.indexOf('function openPatientForm('));
+const ctx={DB:{patients:[]}};vm.createContext(ctx);vm.runInContext(code,ctx);
+const next=()=>vm.runInContext('nextProntuario()',ctx);
+assert.equal(next(),'1');
+ctx.DB.patients=[{numProntuario:'001'},{numProntuario:'009'},{numProntuario:'AB-100'},{numProntuario:''}];
+assert.equal(next(),'010');
+assert.equal(vm.runInContext("prontuarioKey(' 001 ')",ctx),'1');
+ctx.DB.patients=[{numProntuario:'9007199254740993'}];
+assert.equal(next(),'9007199254740994');
+assert(html.includes('"Radiografias","Lembrete"'));
+console.log('Prontuários: sequência vazia, zeros, valores alfanuméricos e números grandes passaram.');
